@@ -243,6 +243,58 @@
 #             install-resource  follows the tessera:// link arg names:
 #                      an install link opens the popup install-resource,
 #                      which installs only with a click; it brings no key
+#             none     does nothing: a [[key]] of it with the press of a key
+#                      an action brings turns that key off, and Tessera
+#                      holds nothing for it
+#             pause-keys  pauses every combination of Tessera but its own
+#                      keys (arg "on"), holds them again ("off"), or does
+#                      the other of the two without arg; it brings no key
+#             activate-window  brings forward the window arg names that
+#                      was used last: "exe:code.exe", "class:Notepad",
+#                      "title:*Firefox" (* any letters, ? one) or "app:"
+#                      and an AppUserModelID; ",start" after exe: or app:
+#                      starts it where no window matches. No key
+#             date-and-time, notifications-keyboard  the popup "calendar"
+#                      (win+alt+d, win+shift+v); sound-output the popup
+#                      "sound" (win+ctrl+v)
+#             window-height  arg "full" stretches the window in front to
+#                      the full height of its display (win+shift+up),
+#                      "back" gives its height back (win+shift+down)
+#             window-half  arg "top" or "bottom": that half of its
+#                      display (win+alt+up, win+alt+down)
+#             magnifier  arg "in" starts Magnifier (win+plus), which then
+#                      answers its keys itself, "out" (win+minus), "close"
+#                      closes it (win+escape)
+#             narrator (win+ctrl+enter), color-filters (win+ctrl+c),
+#                      quick-assist (win+ctrl+q), feedback-hub (win+f) and
+#                      copilot (win+c) start those parts of Windows
+#             bar-settings  the settings at Bars (win+alt+enter)
+#             find-computers  the search for computers of the network
+#                      (win+ctrl+f)
+#             emoji-panel  the runner with only its emoji; no key, as
+#                      win+period stays with Windows
+#
+# A press can also be up to four combinations one after the other, with
+# commas between them, and keys held with the middle, back or forward
+# button of the mouse (which the mouse hook does not take yet). The keys
+# of the number pad are num0 to num9, multiply, add, subtract, decimal and
+# divide; semicolon, slash, backslash, leftbracket, rightbracket, quote,
+# scrolllock and menu name the others. The settings edit all of them under
+# Keys > Shortcuts.
+#
+# [[key]]
+# press = "ctrl+alt+k, t"
+# action = "activate-window"
+# arg = "exe:WindowsTerminal.exe,start"
+#
+# [[key]]
+# press = "win+d"
+# action = "none"
+#
+# [[key]]
+# press = "ctrl+alt+win+p"
+# action = "pause-keys"
+#
 #           The keys in brackets are bound to the actions where
 #           windows_keys is on (see above), unless a [[key]] presses the
 #           same keys, and they are taken from Windows. win+l,

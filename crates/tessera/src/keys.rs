@@ -10,17 +10,24 @@
 //! named actions of [`crate::actions`].
 
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use gpui::{App, AsyncApp, Global};
 
 use crate::actions::Actions;
 use crate::config::KeyConfig;
 use crate::files::Files;
+use crate::i18n::Language;
 use crate::modules::windows::Docks;
-use crate::platform::{Commands, Hotkey, Hotkeys, Modifiers, TakenKeys, shell_mode};
+use crate::platform::{
+    Commands, Display, Hotkey, Hotkeys, Modifiers, MouseBinding, MouseButtonName, MouseButtons,
+    TakenKeys, pointer_at, shell_mode,
+};
 use crate::shell::Shell;
+use crate::snap::anchor_at;
 use crate::switcher::Switcher;
 use crate::tiling::{Tiler, TilingCommand, Toward, parse_command};
+use crate::tip::{TipKey, Tips};
 use crate::workspaces::Workspaces;
 
 /// The keys a combination ends with, as the configuration names them;
@@ -108,6 +115,29 @@ pub const KEYS: &[&str] = &[
     "f22",
     "f23",
     "f24",
+    "semicolon",
+    "slash",
+    "backslash",
+    "leftbracket",
+    "rightbracket",
+    "quote",
+    "num0",
+    "num1",
+    "num2",
+    "num3",
+    "num4",
+    "num5",
+    "num6",
+    "num7",
+    "num8",
+    "num9",
+    "multiply",
+    "add",
+    "subtract",
+    "decimal",
+    "divide",
+    "scrolllock",
+    "menu",
 ];
 
 /// The keys to hold, as they are shown, in the order they are written in.
@@ -170,6 +200,160 @@ impl Press {
         names.push(key_label(&self.key));
         names.join(" + ")
     }
+
+    /// What `text` presses as a step of a sequence after its first: a
+    /// combination, or a key by itself, as `t`.
+    pub fn parse_step(text: &str) -> Option<Self> {
+        if let Some(press) = Self::parse(text) {
+            return Some(press);
+        }
+        Hotkey::key_code(text)?;
+        Some(Self {
+            held: Modifiers::default(),
+            key: text.trim().to_ascii_lowercase(),
+        })
+    }
+
+    /// The step as the configuration writes it: the combination, or the
+    /// key by itself where none is held.
+    pub fn step_written(&self) -> String {
+        self.written().unwrap_or_else(|| self.key.clone())
+    }
+}
+
+/// The most combinations a sequence has, as in KDE Plasma.
+pub const MOST_STEPS: usize = 4;
+
+/// The mouse buttons a `press` can end with, by the names the
+/// configuration gives them, and what each is called where it is shown.
+pub const BUTTONS: [(&str, MouseButtonName, &str); 3] = [
+    ("middle", MouseButtonName::Middle, "Middle button"),
+    ("back", MouseButtonName::Back, "Back button"),
+    ("forward", MouseButtonName::Forward, "Forward button"),
+];
+
+/// What the `press` of a `[[key]]` asks for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Gesture {
+    /// One combination, or up to [`MOST_STEPS`] pressed one after the
+    /// other, written with commas between them (`ctrl+alt+k, t`). The
+    /// first holds keys; a later one may be a key by itself.
+    Keys(Vec<Press>),
+    /// A mouse button pressed while keys are held, as `ctrl+back`.
+    Button(MouseBinding),
+}
+
+impl Gesture {
+    /// What `text` asks for, if it is a press Tessera can answer.
+    pub fn parse(text: &str) -> Option<Self> {
+        let parts: Vec<&str> = text.split(',').map(str::trim).collect();
+        if let [part] = parts[..]
+            && let Some(binding) = Self::button(part)
+        {
+            return Some(Self::Button(binding));
+        }
+        if parts.len() > MOST_STEPS {
+            return None;
+        }
+        let (first, rest) = parts.split_first()?;
+        let mut steps = vec![Press::parse(first)?];
+        for part in rest {
+            steps.push(Press::parse_step(part)?);
+        }
+        Some(Self::Keys(steps))
+    }
+
+    /// The mouse button and the keys held that `text` names, as
+    /// `ctrl+back`; a button with no key held is none.
+    fn button(text: &str) -> Option<MouseBinding> {
+        let (held, name) = text.rsplit_once('+')?;
+        let name = name.trim().to_ascii_lowercase();
+        let (_, button, _) = BUTTONS.into_iter().find(|(known, ..)| *known == name)?;
+        Some(MouseBinding {
+            held: Modifiers::parse(held)?,
+            button,
+        })
+    }
+
+    /// The press as the configuration writes it.
+    pub fn written(&self) -> String {
+        match self {
+            Self::Keys(steps) => {
+                let steps: Vec<String> = steps.iter().map(Press::step_written).collect();
+                steps.join(", ")
+            }
+            Self::Button(binding) => {
+                let (name, ..) = Self::button_names(binding.button);
+                format!("{}+{name}", binding.held.written())
+            }
+        }
+    }
+
+    /// The press as it is shown, in `language` for a mouse button.
+    pub fn shown(&self, language: Language) -> String {
+        match self {
+            Self::Keys(steps) => {
+                let steps: Vec<String> = steps.iter().map(Press::shown).collect();
+                steps.join(", ")
+            }
+            Self::Button(binding) => {
+                let (_, title) = Self::button_names(binding.button);
+                let press = Press {
+                    held: binding.held,
+                    key: String::new(),
+                };
+                let mut names: Vec<String> =
+                    press.held().map(|which| HELD[which].to_owned()).collect();
+                names.push(language.say(title).to_owned());
+                names.join(" + ")
+            }
+        }
+    }
+
+    fn button_names(button: MouseButtonName) -> (&'static str, &'static str) {
+        let found = BUTTONS.into_iter().find(|(_, known, _)| *known == button);
+        found.map_or(("middle", "Middle button"), |(name, _, title)| {
+            (name, title)
+        })
+    }
+
+    /// The combinations of the press, none for a mouse button.
+    pub fn steps(&self) -> &[Press] {
+        match self {
+            Self::Keys(steps) => steps,
+            Self::Button(_) => &[],
+        }
+    }
+
+    /// Whether `self` and `other` cannot both be answered: they are the
+    /// same, or one is a sequence that begins with the other, which is
+    /// then answered at once and leaves no time for the rest.
+    pub fn clashes(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Keys(mine), Self::Keys(theirs)) => {
+                mine.starts_with(theirs) || theirs.starts_with(mine)
+            }
+            _ => self == other,
+        }
+    }
+}
+
+/// The press `text` names, written as the configuration writes it, so that
+/// two ways of writing the same keys compare equal; `None` for no press.
+pub fn written_press(text: &str) -> Option<String> {
+    Gesture::parse(text).map(|gesture| gesture.written())
+}
+
+/// Whether `key` can be used, and why not: what it presses, and what it
+/// does with the actions of `actions`.
+pub fn check(key: &KeyConfig, actions: &Actions) -> Result<(), String> {
+    if Gesture::parse(&key.press).is_none() {
+        return Err(format!(
+            "`{}` is no press: keys to hold and a key joined by +, up to four of them after one another with commas, or keys to hold and `middle`, `back` or `forward`",
+            key.press
+        ));
+    }
+    Deed::of(key, actions).map(drop)
 }
 
 /// What stands on the key the configuration calls `key`.
@@ -188,8 +372,21 @@ pub fn key_label(key: &str) -> String {
         "plus" => "+".to_owned(),
         "minus" => "-".to_owned(),
         "backquote" => "`".to_owned(),
+        "semicolon" => ";".to_owned(),
+        "slash" => "/".to_owned(),
+        "backslash" => "\\".to_owned(),
+        "leftbracket" => "[".to_owned(),
+        "rightbracket" => "]".to_owned(),
+        "quote" => "'".to_owned(),
+        "multiply" => "Num *".to_owned(),
+        "add" => "Num +".to_owned(),
+        "subtract" => "Num -".to_owned(),
+        "decimal" => "Num .".to_owned(),
+        "divide" => "Num /".to_owned(),
+        "scrolllock" => "Scroll Lock".to_owned(),
+        _ if key.starts_with("num") => format!("Num {}", &key[3..]),
         "space" | "tab" | "enter" | "home" | "end" | "insert" | "delete" | "backspace"
-        | "pause" => {
+        | "pause" | "menu" => {
             let (first, rest) = key.split_at(1);
             format!("{}{rest}", first.to_ascii_uppercase())
         }
@@ -430,6 +627,101 @@ pub(crate) fn start_program(command: &[String]) {
     }
 }
 
+/// What became of an entry in use.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeyState {
+    /// Tessera holds its keys.
+    Held,
+    /// Windows keeps its keys to itself; Tessera's keyboard hook takes
+    /// them from it.
+    Taken,
+    /// Another program holds its keys, so it does nothing.
+    Refused,
+    /// Its action is `none`: nothing is held, and the keys stay with
+    /// whoever has them.
+    Off,
+    /// A mouse button, taken by the mouse hook.
+    Button,
+    /// Held back while `pause-keys` pauses the keys.
+    Paused,
+    /// It does nothing, for this reason.
+    Broken(String),
+}
+
+/// The number the first step after the first of a sequence is reported
+/// by while it is waited for; the others follow it.
+const FIRST_STEP: u32 = 1 << 24;
+
+/// How long the next combination of a sequence is waited for.
+const STEP_WAIT: Duration = Duration::from_millis(1500);
+
+/// What the tip of a sequence under way is known by.
+const STEPS_TIP: TipKey = ("key-sequence", 0);
+
+/// The action that does nothing, which turns off a key an action brings.
+pub const NO_ACTION: &str = "none";
+
+/// The action that pauses the keys, whose own keys are never paused.
+pub const PAUSE_ACTION: &str = "pause-keys";
+
+/// A sequence under way: the combinations pressed so far, and the entries
+/// whose press begins with them.
+#[derive(Clone, Debug, PartialEq)]
+struct Steps {
+    pressed: Vec<Press>,
+    entries: Vec<usize>,
+}
+
+/// What pressing a combination of a sequence comes to.
+#[derive(Debug, PartialEq)]
+enum Stepped {
+    /// The press of this entry is complete.
+    Done(usize),
+    /// More is waited for.
+    Waiting(Steps),
+    /// No press begins so.
+    Nothing,
+}
+
+impl Steps {
+    /// What having pressed `pressed` comes to among the entries `among`,
+    /// each with the combinations of its press: an entry that presses
+    /// exactly these is done at once.
+    fn after<'a>(
+        pressed: Vec<Press>,
+        among: impl IntoIterator<Item = (usize, &'a [Press])>,
+    ) -> Stepped {
+        let begun: Vec<(usize, &[Press])> = { among.into_iter() }
+            .filter(|(_, steps)| steps.starts_with(&pressed))
+            .collect();
+        if let Some((index, _)) = begun.iter().find(|(_, steps)| steps.len() == pressed.len()) {
+            return Stepped::Done(*index);
+        }
+        match begun.is_empty() {
+            true => Stepped::Nothing,
+            false => Stepped::Waiting(Self {
+                pressed,
+                entries: begun.into_iter().map(|(index, _)| index).collect(),
+            }),
+        }
+    }
+
+    /// The combinations that can come next, each once, among `gestures`.
+    fn next(&self, gestures: &[Option<Gesture>]) -> Vec<Press> {
+        let mut next: Vec<Press> = Vec::new();
+        for &index in &self.entries {
+            let steps = { gestures.get(index).and_then(Option::as_ref) }.map(Gesture::steps);
+            let Some(step) = steps.and_then(|steps| steps.get(self.pressed.len())) else {
+                continue;
+            };
+            if !next.contains(step) {
+                next.push(step.clone());
+            }
+        }
+        next
+    }
+}
+
 /// The `[[key]]` entries in use.
 #[derive(Default)]
 pub struct Shortcuts {
@@ -438,9 +730,34 @@ pub struct Shortcuts {
     config: Vec<KeyConfig>,
     /// What each entry does; `None` for one that cannot be used.
     deeds: Vec<Option<Deed>>,
+    /// What each entry presses; `None` for one that cannot be read.
+    gestures: Vec<Option<Gesture>>,
+    /// What became of each entry.
+    states: Vec<KeyState>,
+    /// Whether `pause-keys` pauses the keys.
+    paused: bool,
+    /// The sequence under way and the combinations that may come next.
+    steps: Option<(Steps, Vec<Press>)>,
+    /// Counts the sequences begun, so that the end of the wait for one
+    /// that is over already changes nothing.
+    sequences: u64,
 }
 
 impl Global for Shortcuts {}
+
+/// What the entries in use come to, before Windows is asked for them.
+struct Read {
+    deeds: Vec<Option<Deed>>,
+    gestures: Vec<Option<Gesture>>,
+    states: Vec<KeyState>,
+    /// The combinations to hold: the first of each press, once for all
+    /// the entries whose press begins with it.
+    hotkeys: Vec<Hotkey>,
+    /// For each entry, the one whose combination is held for it.
+    holders: Vec<Option<usize>>,
+    /// The entries pressed with a mouse button, and each button.
+    buttons: Vec<(usize, MouseBinding)>,
+}
 
 impl Shortcuts {
     /// Takes the combinations of `keys` and answers every combination
@@ -450,9 +767,10 @@ impl Shortcuts {
         let presses = Hotkeys::presses();
         cx.spawn(async move |cx: &mut AsyncApp| {
             while let Ok(pressed) = presses.recv().await {
-                let answered = cx.update(|cx| match pressed.checked_sub(FIRST) {
-                    Some(index) => Self::pressed(index as usize, cx),
-                    None => Workspaces::pressed(pressed, cx),
+                let answered = cx.update(|cx| match pressed {
+                    FIRST_STEP.. => Self::step_pressed((pressed - FIRST_STEP) as usize, cx),
+                    FIRST.. => Self::pressed((pressed - FIRST) as usize, cx),
+                    _ => Workspaces::pressed(pressed, cx),
                 });
                 if answered.is_err() {
                     break;
@@ -509,39 +827,105 @@ impl Shortcuts {
         if this.config == keys {
             return;
         }
-        this.config = keys.clone();
-        let keys = keys.as_slice();
+        this.config = keys;
+        Self::hold(cx);
+    }
+
+    /// Asks Windows for the combinations of the entries in use, or, while
+    /// the keys are paused, for those of `pause-keys` alone, and binds the
+    /// mouse buttons.
+    fn hold(cx: &mut App) {
+        Self::end_steps(cx);
+        let keys = cx.global::<Self>().config.clone();
+        let paused = cx.global::<Self>().paused;
         let actions = Self::actions(cx);
-        let (deeds, hotkeys) = Self::read(keys, actions);
+        let mut read = Self::read(&keys, actions);
+        let pausing = |deed: &Option<Deed>| matches!(deed, Some(Deed::Action { name, .. }) if name == PAUSE_ACTION);
+        let kept: Vec<u32> = { read.hotkeys.iter() }
+            .filter(|hotkey| pausing(&read.deeds[(hotkey.id - FIRST) as usize]))
+            .map(|hotkey| hotkey.id)
+            .collect();
+        if let Err(error) = Hotkeys::pause(paused.then(|| kept.clone())) {
+            report!("the keys cannot be paused: {error:#}");
+        }
         // Windows keeps Alt+Tab, the Windows key with a digit and Win+E,
         // which opens Explorer, to itself. The keys of the window
         // switcher, of the dock, of the file manager and of the actions
         // that ask for it that it refuses are taken from it; a refused
         // combination of anything else is left to whoever holds it.
         let switches = |id: u32| {
-            let deed = deeds.get((id - FIRST) as usize);
+            let deed = read.deeds.get((id - FIRST) as usize);
             deed.is_some_and(|deed| {
                 deed.as_ref()
                     .is_some_and(|deed| deed.takes_reserved_keys(actions))
             })
         };
+        let hotkeys = read.hotkeys.clone();
         let refused = Hotkeys::set("keys", hotkeys.clone()).unwrap_or_else(|error| {
             report!("the `[[key]]` entries have no keys: {error:#}");
             hotkeys.iter().map(|hotkey| hotkey.id).collect()
         });
+        let held_now = |id: &u32| !paused || kept.contains(id);
+        let refused: Vec<u32> = refused.into_iter().filter(held_now).collect();
         let (taken, refused): (Vec<u32>, Vec<u32>) =
             refused.into_iter().partition(|&id| switches(id));
-        for id in refused {
+        for &id in &refused {
             let press = &keys[(id - FIRST) as usize].press;
             report!("Windows did not give the keys `{press}`: they are held already");
         }
-        let taken = hotkeys
-            .into_iter()
-            .filter(|hotkey| taken.contains(&hotkey.id));
-        if let Err(error) = TakenKeys::set(taken.collect()) {
+        let taken_keys = { hotkeys.iter() }.filter(|hotkey| taken.contains(&hotkey.id));
+        if let Err(error) = TakenKeys::set(taken_keys.copied().collect()) {
             report!("the keys Windows keeps to itself stay with it: {error:#}");
         }
-        cx.global_mut::<Self>().deeds = deeds;
+        for (index, holder) in read.holders.iter().enumerate() {
+            let Some(id) = holder.map(|holder| FIRST + holder as u32) else {
+                continue;
+            };
+            read.states[index] = if refused.contains(&id) {
+                KeyState::Refused
+            } else if taken.contains(&id) {
+                KeyState::Taken
+            } else if !held_now(&id) {
+                KeyState::Paused
+            } else {
+                KeyState::Held
+            };
+        }
+        let buttons = match paused {
+            true => Vec::new(),
+            false => read.buttons.clone(),
+        };
+        if paused {
+            for (index, _) in &read.buttons {
+                read.states[*index] = KeyState::Paused;
+            }
+        }
+        Self::bind_buttons(buttons, cx);
+        let this = cx.global_mut::<Self>();
+        this.deeds = read.deeds;
+        this.gestures = read.gestures;
+        this.states = read.states;
+    }
+
+    /// Has the mouse buttons of `buttons` answered, each with what its
+    /// entry does; the buttons bound before are given up.
+    fn bind_buttons(buttons: Vec<(usize, MouseBinding)>, cx: &mut App) {
+        let bindings = buttons.iter().map(|(_, binding)| *binding).collect();
+        let presses = MouseButtons::bind(bindings);
+        if buttons.is_empty() {
+            return;
+        }
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            while let Ok(pressed) = presses.recv().await {
+                let Some(&(index, _)) = buttons.get(pressed) else {
+                    continue;
+                };
+                if cx.update(|cx| Self::pressed(index, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Configures the entries last configured again, after an action
@@ -555,18 +939,61 @@ impl Shortcuts {
         Self::configure(&keys, windows_keys, cx);
     }
 
+    /// Pauses every combination of Tessera but the keys of `pause-keys`
+    /// with `Some(true)`, holds them again with `Some(false)`, and does
+    /// the other of the two with `None`.
+    pub fn pause(pause: Option<bool>, cx: &mut App) {
+        if cx.try_global::<Self>().is_none() {
+            return;
+        }
+        let this = cx.global_mut::<Self>();
+        let paused = pause.unwrap_or(!this.paused);
+        if this.paused == paused {
+            return;
+        }
+        this.paused = paused;
+        Self::hold(cx);
+    }
+
+    /// Whether the keys are paused.
+    pub fn paused(cx: &App) -> bool {
+        cx.try_global::<Self>().is_some_and(|this| this.paused)
+    }
+
+    /// The entries of the user and whether the keys of Windows are asked
+    /// for (`windows_keys`), as last configured.
+    pub fn asked(cx: &App) -> (&[KeyConfig], Option<bool>) {
+        match cx.try_global::<Self>() {
+            Some(this) => (&this.asked.0, this.asked.1),
+            None => (&[], None),
+        }
+    }
+
+    /// The entries in use, each with what became of it: those of the user,
+    /// then the keys the actions bring that are bound.
+    pub fn in_use_now(cx: &App) -> Vec<(KeyConfig, KeyState)> {
+        let Some(this) = cx.try_global::<Self>() else {
+            return Vec::new();
+        };
+        let states = this
+            .states
+            .iter()
+            .cloned()
+            .chain(std::iter::repeat(KeyState::Held));
+        this.config.iter().cloned().zip(states).collect()
+    }
+
     /// The entries of the user, and after them, where `defaults`, the
     /// keys the actions bind by default that press other keys than every
     /// entry of the user does.
     fn in_use(keys: &[KeyConfig], defaults: bool, actions: &Actions) -> Vec<KeyConfig> {
-        let pressed = |press: &str| Press::parse(press).and_then(|press| press.written());
         let mut in_use = keys.to_vec();
         if !defaults {
             return in_use;
         }
-        let taken: Vec<Option<String>> = keys.iter().map(|key| pressed(&key.press)).collect();
+        let taken: Vec<Option<String>> = keys.iter().map(|key| written_press(&key.press)).collect();
         for key in actions.default_keys() {
-            let press = pressed(&key.press);
+            let press = written_press(&key.press);
             if press.is_none() || !taken.contains(&press) {
                 in_use.push(key);
             }
@@ -580,40 +1007,189 @@ impl Shortcuts {
         cx.default_global::<Actions>()
     }
 
-    /// What each entry does and the combination of each one that can be
-    /// used; the others are reported.
-    fn read(keys: &[KeyConfig], actions: &Actions) -> (Vec<Option<Deed>>, Vec<Hotkey>) {
-        let mut hotkeys = Vec::new();
-        let deeds = keys.iter().enumerate().map(|(index, key)| {
+    /// What each entry does and presses and the combinations to hold for
+    /// them; the entries that cannot be used are reported.
+    fn read(keys: &[KeyConfig], actions: &Actions) -> Read {
+        let mut read = Read {
+            deeds: Vec::new(),
+            gestures: Vec::new(),
+            states: Vec::new(),
+            hotkeys: Vec::new(),
+            holders: Vec::new(),
+            buttons: Vec::new(),
+        };
+        // The first combination of every press held so far, and the entry
+        // it is held for.
+        let mut firsts: Vec<(Press, usize)> = Vec::new();
+        for (index, key) in keys.iter().enumerate() {
             let press = &key.press;
-            let Some(hotkey) = Hotkey::parse(FIRST + index as u32, press) else {
-                report!("a `[[key]]` presses keys to hold and a key joined by +, not `{press}`");
-                return None;
-            };
-            match Deed::of(key, actions) {
-                Ok(deed) => {
-                    hotkeys.push(hotkey);
-                    Some(deed)
+            let gesture = Gesture::parse(press);
+            let deed = Deed::of(key, actions);
+            let (deed, state, holder) = match (&gesture, deed) {
+                (None, _) => {
+                    report!(
+                        "a `[[key]]` presses keys to hold and a key joined by +, not `{press}`"
+                    );
+                    let why = "its keys are no combination".to_owned();
+                    (None, KeyState::Broken(why), None)
                 }
-                Err(why) => {
+                (Some(_), Err(why)) => {
                     report!("the `[[key]]` of `{press}` does nothing: {why}");
-                    None
+                    (None, KeyState::Broken(why), None)
                 }
-            }
-        });
-        (deeds.collect(), hotkeys)
+                (Some(_), Ok(Deed::Action { name, .. })) if name == NO_ACTION => {
+                    (None, KeyState::Off, None)
+                }
+                (Some(Gesture::Button(binding)), Ok(deed)) => {
+                    read.buttons.push((index, *binding));
+                    (Some(deed), KeyState::Button, None)
+                }
+                (Some(Gesture::Keys(steps)), Ok(deed)) => {
+                    let first = &steps[0];
+                    let holder = match firsts.iter().find(|(held, _)| held == first) {
+                        Some((_, holder)) => *holder,
+                        None => {
+                            let written = first.written().unwrap_or_default();
+                            match Hotkey::parse(FIRST + index as u32, &written) {
+                                Some(hotkey) => read.hotkeys.push(hotkey),
+                                None => report!("the keys `{written}` cannot be held"),
+                            }
+                            firsts.push((first.clone(), index));
+                            index
+                        }
+                    };
+                    (Some(deed), KeyState::Held, Some(holder))
+                }
+            };
+            read.deeds.push(deed);
+            read.gestures.push(gesture);
+            read.states.push(state);
+            read.holders.push(holder);
+        }
+        read
     }
 
+    /// Answers the combination held for the entry at `index`: what the
+    /// entry does, or, where presses go on after it, the beginning of a
+    /// sequence.
     fn pressed(index: usize, cx: &mut App) {
         let this = cx.global::<Self>();
+        let first = match this.gestures.get(index).and_then(Option::as_ref) {
+            Some(Gesture::Keys(steps)) => steps[..1].to_vec(),
+            Some(Gesture::Button(_)) => return Self::done(index, cx),
+            None => return,
+        };
+        let among = Self::sequences(this);
+        match Steps::after(first, among) {
+            Stepped::Done(index) => Self::done(index, cx),
+            Stepped::Waiting(steps) => Self::wait_for_step(steps, cx),
+            Stepped::Nothing => {}
+        }
+    }
+
+    /// The entries that do something, each with the combinations of its
+    /// press.
+    fn sequences(this: &Self) -> Vec<(usize, &[Press])> {
+        let entries = this.gestures.iter().zip(&this.deeds).enumerate();
+        { entries }
+            .filter(|(_, (_, deed))| deed.is_some())
+            .filter_map(|(index, (gesture, _))| Some((index, gesture.as_ref()?.steps())))
+            .collect()
+    }
+
+    /// Does what the entry at `index` does.
+    fn done(index: usize, cx: &mut App) {
+        let this = cx.global::<Self>();
         let deed = this.deeds.get(index).cloned().flatten();
-        let held = { this.config.get(index) }
-            .and_then(|key| Press::parse(&key.press))
-            .map(|press| press.held)
-            .unwrap_or_default();
+        let steps = { this.gestures.get(index).and_then(Option::as_ref) }.map(Gesture::steps);
+        let held = match this.gestures.get(index).and_then(Option::as_ref) {
+            Some(Gesture::Button(binding)) => binding.held,
+            _ => { steps.and_then(<[Press]>::last) }
+                .map(|press| press.held)
+                .unwrap_or_default(),
+        };
         if let Some(deed) = deed {
             Actions::pressing(held, cx, |cx| deed.done(cx));
         }
+    }
+
+    /// Holds the combinations that can come after `steps`, and Esc, for a
+    /// moment, with a tip at the pointer of what was pressed so far.
+    fn wait_for_step(steps: Steps, cx: &mut App) {
+        let this = cx.global_mut::<Self>();
+        let next = steps.next(&this.gestures);
+        let escape = Press {
+            held: Modifiers::default(),
+            key: "escape".to_owned(),
+        };
+        let shown: Vec<String> = steps.pressed.iter().map(Press::shown).collect();
+        this.sequences += 1;
+        let sequence = this.sequences;
+        let mut held: Vec<Press> = next.clone();
+        if !held.contains(&escape) {
+            held.push(escape);
+        }
+        this.steps = Some((steps, next));
+        let hotkeys = { held.iter().enumerate() }
+            .filter_map(|(at, press)| Hotkey::step(FIRST_STEP + at as u32, &press.step_written()))
+            .collect();
+        if let Err(error) = Hotkeys::set("key steps", hotkeys) {
+            report!("the rest of a sequence of keys cannot be waited for: {error:#}");
+        }
+        let text = format!("{}, \u{2026}", shown.join(", "));
+        if let Some(point) = pointer_at()
+            && let Some(display) = Display::at(point)
+        {
+            let anchor = anchor_at(&display, point, cx);
+            Tips::request(STEPS_TIP, text.into(), anchor, cx);
+        }
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            cx.background_executor().timer(STEP_WAIT).await;
+            cx.update(|cx| {
+                if cx.global::<Self>().sequences == sequence {
+                    Self::end_steps(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Answers the combination at `at` of those held after the steps of
+    /// a sequence pressed so far; the one after them is Esc, which, as a
+    /// combination no entry goes on with, ends the sequence.
+    fn step_pressed(at: usize, cx: &mut App) {
+        let Some((steps, next)) = Self::end_steps(cx) else {
+            return;
+        };
+        let Some(step) = next.get(at) else {
+            return;
+        };
+        let mut pressed = steps.pressed;
+        pressed.push(step.clone());
+        let this = cx.global::<Self>();
+        let among = { Self::sequences(this).into_iter() }
+            .filter(|(index, _)| steps.entries.contains(index));
+        let among: Vec<(usize, &[Press])> = among.collect();
+        match Steps::after(pressed, among) {
+            Stepped::Done(index) => Self::done(index, cx),
+            Stepped::Waiting(steps) => Self::wait_for_step(steps, cx),
+            Stepped::Nothing => {}
+        }
+    }
+
+    /// Ends the sequence under way, if there is one, which is answered:
+    /// the combinations that could come next are given up and the tip
+    /// goes.
+    fn end_steps(cx: &mut App) -> Option<(Steps, Vec<Press>)> {
+        let this = cx.global_mut::<Self>();
+        let waiting = this.steps.take()?;
+        this.sequences += 1;
+        if let Err(error) = Hotkeys::set("key steps", Vec::new()) {
+            report!("{error:#}");
+        }
+        Tips::leave(STEPS_TIP, cx);
+        Some(waiting)
     }
 }
 
@@ -873,16 +1449,145 @@ mod tests {
     fn only_the_keys_that_can_be_used_are_held() {
         let mut unreadable = key(Some("launcher"), None, None);
         unreadable.press = "k".to_owned();
+        let mut tiling = key(None, Some("next"), None);
+        tiling.press = "ctrl+alt+t".to_owned();
         let keys = [
             key(Some("launcher"), None, None),
             unreadable,
             key(None, None, None),
-            key(None, Some("next"), None),
+            tiling,
         ];
-        let (deeds, hotkeys) = Shortcuts::read(&keys, &actions());
-        let held: Vec<u32> = hotkeys.iter().map(|key| key.id).collect();
+        let read = Shortcuts::read(&keys, &actions());
+        let held: Vec<u32> = read.hotkeys.iter().map(|key| key.id).collect();
         assert_eq!(held, [FIRST, FIRST + 3]);
-        let usable: Vec<bool> = deeds.iter().map(Option::is_some).collect();
+        let usable: Vec<bool> = read.deeds.iter().map(Option::is_some).collect();
         assert_eq!(usable, [true, false, false, true]);
+        assert!(matches!(read.states[1], KeyState::Broken(_)));
+        assert_eq!(read.holders, [Some(0), None, None, Some(3)]);
+    }
+
+    #[test]
+    fn presses_that_begin_alike_hold_their_first_combination_once() {
+        let pressing = |press: &str, popup: &str| {
+            let mut key = key(Some(popup), None, None);
+            key.press = press.to_owned();
+            key
+        };
+        let mut off = key(None, None, None);
+        off.press = "win+d".to_owned();
+        off.action = Some(NO_ACTION.to_owned());
+        let mut mouse = key(Some("media"), None, None);
+        mouse.press = "ctrl+back".to_owned();
+        let keys = [
+            pressing("ctrl+alt+k, t", "launcher"),
+            pressing("Ctrl+Alt+K, Shift+U", "calendar"),
+            off,
+            mouse,
+        ];
+        let mut actions = actions();
+        actions
+            .register(NO_ACTION, crate::actions::Action::new(|_, _| {}))
+            .unwrap();
+        let read = Shortcuts::read(&keys, &actions);
+        let held: Vec<u32> = read.hotkeys.iter().map(|key| key.id).collect();
+        assert_eq!(held, [FIRST], "only the first combination, once");
+        assert_eq!(read.holders, [Some(0), Some(0), None, None]);
+        assert_eq!(read.states[2], KeyState::Off);
+        assert_eq!(read.states[3], KeyState::Button);
+        let button = MouseBinding {
+            held: Modifiers::parse("ctrl").unwrap(),
+            button: MouseButtonName::Back,
+        };
+        assert_eq!(read.buttons, [(3, button)]);
+    }
+
+    #[test]
+    fn a_press_is_a_combination_a_sequence_or_a_mouse_button() {
+        let written = |text: &str| written_press(text);
+        assert_eq!(written("Win + Shift + Up").as_deref(), Some("shift+win+up"));
+        assert_eq!(written("ctrl+alt+k ,T").as_deref(), Some("ctrl+alt+k, t"));
+        assert_eq!(
+            written("ctrl+alt+k, shift+num1, escape, f2").as_deref(),
+            Some("ctrl+alt+k, shift+num1, escape, f2")
+        );
+        assert_eq!(written("ctrl+alt+k, t, u, v, w"), None, "five steps");
+        assert_eq!(written("k, t"), None, "the first step holds keys");
+        assert_eq!(written("ctrl+alt+k, "), None);
+        assert_eq!(written("Ctrl+Back").as_deref(), Some("ctrl+back"));
+        assert_eq!(
+            written("alt+shift+middle").as_deref(),
+            Some("alt+shift+middle")
+        );
+        assert_eq!(written("forward"), None, "a button needs keys held");
+        assert_eq!(written("ctrl+back, t"), None);
+        let gesture = Gesture::parse("ctrl+alt+k, t").unwrap();
+        assert_eq!(gesture.shown(Language::English), "Ctrl + Alt + K, T");
+        let mouse = Gesture::parse("win+forward").unwrap();
+        assert_eq!(mouse.shown(Language::English), "Win + Forward button");
+        assert!(mouse.steps().is_empty());
+    }
+
+    #[test]
+    fn a_sequence_clashes_with_what_it_begins_with() {
+        let gesture = |text| Gesture::parse(text).unwrap();
+        let single = gesture("ctrl+alt+k");
+        let sequence = gesture("ctrl+alt+k, t");
+        assert!(single.clashes(&sequence));
+        assert!(sequence.clashes(&single));
+        assert!(sequence.clashes(&gesture("Ctrl+Alt+K, T")));
+        assert!(!sequence.clashes(&gesture("ctrl+alt+k, u")));
+        assert!(!single.clashes(&gesture("ctrl+back")));
+        assert!(gesture("ctrl+back").clashes(&gesture("Ctrl+Back")));
+    }
+
+    #[test]
+    fn a_sequence_goes_on_until_one_press_is_complete() {
+        let steps = |text: &str| Gesture::parse(text).unwrap().steps().to_vec();
+        let presses = [
+            steps("ctrl+alt+k, t"),
+            steps("ctrl+alt+k, u, v"),
+            steps("ctrl+alt+j"),
+        ];
+        let among = || {
+            presses
+                .iter()
+                .enumerate()
+                .map(|(index, steps)| (index, &steps[..]))
+        };
+        let first = steps("ctrl+alt+k");
+        let Stepped::Waiting(waiting) = Steps::after(first, among()) else {
+            panic!("two presses go on");
+        };
+        assert_eq!(waiting.entries, [0, 1]);
+        let gestures: Vec<Option<Gesture>> = { presses.iter() }
+            .map(|steps| Some(Gesture::Keys(steps.clone())))
+            .collect();
+        let next = waiting.next(&gestures);
+        let next: Vec<String> = next.iter().map(Press::step_written).collect();
+        assert_eq!(next, ["t", "u"]);
+        assert_eq!(
+            Steps::after(steps("ctrl+alt+k, t"), among()),
+            Stepped::Done(0)
+        );
+        assert_eq!(Steps::after(steps("ctrl+alt+j"), among()), Stepped::Done(2));
+        assert_eq!(
+            Steps::after(steps("ctrl+alt+k, w"), among()),
+            Stepped::Nothing
+        );
+        let Stepped::Waiting(later) = Steps::after(steps("ctrl+alt+k, u"), among()) else {
+            panic!("one press goes on");
+        };
+        assert_eq!(later.entries, [1]);
+    }
+
+    #[test]
+    fn every_key_windows_can_name_is_offered() {
+        for name in Hotkey::key_names() {
+            assert!(KEYS.contains(&name), "`{name}` is not offered");
+        }
+        assert_eq!(key_label("num4"), "Num 4");
+        assert_eq!(key_label("add"), "Num +");
+        assert_eq!(key_label("menu"), "Menu");
+        assert_eq!(key_label("backslash"), "\\");
     }
 }

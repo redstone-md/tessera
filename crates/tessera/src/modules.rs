@@ -23,6 +23,7 @@ mod launcher;
 mod look;
 mod marketplace;
 mod media;
+mod more_windows_keys;
 mod network;
 pub mod night;
 mod notifications;
@@ -41,6 +42,7 @@ mod runner_settings;
 mod session;
 mod settings;
 mod settings_parts;
+mod shortcuts;
 mod sound;
 mod spacer;
 mod start;
@@ -70,6 +72,7 @@ pub(crate) use runner_settings::RunnerCatalog;
 pub use settings::Settings;
 #[allow(unused_imports, reason = "for the Shortcuts page of shortcuts-editor")]
 pub(crate) use settings::{ActionTitle, action_titles};
+pub use shortcuts::record_for_window;
 
 /// Every module the shell starts with; the last one loads extensions.
 pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
@@ -123,6 +126,8 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(wifi::WifiModule),
         Box::new(windows::WindowsModule),
         Box::new(windows_keys::WindowsKeysModule),
+        Box::new(more_windows_keys::MoreWindowsKeysModule),
+        Box::new(shortcuts::ShortcutsModule),
         Box::new(winx::WinxModule),
         Box::new(workspaces::WorkspacesModule),
         Box::new(overview::OverviewModule),

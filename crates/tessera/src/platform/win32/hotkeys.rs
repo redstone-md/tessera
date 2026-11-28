@@ -6,20 +6,27 @@
 //! Windows gives a combination to the thread that asked for it, as a
 //! message, and to nobody else while that lasts. The combinations have a
 //! thread of their own, which waits for those messages and nothing else.
+//!
+//! A combination can also be recorded: every combination is given up for
+//! that time, and a keyboard hook on a thread of its own takes the next
+//! one pressed, so that the settings learn which keys to write.
 
-use std::sync::{Mutex, OnceLock, mpsc};
+use std::sync::{Mutex, MutexGuard, OnceLock, mpsc};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use async_channel::{Receiver, Sender};
-use windows::Win32::Foundation::{LPARAM, WPARAM};
+use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
     RegisterHotKey, UnregisterHotKey, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetMessageW, MSG, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, WM_HOTKEY, WM_QUIT,
+    CallNextHookEx, GetMessageW, HC_ACTION, KBDLLHOOKSTRUCT, KillTimer, MSG, PM_NOREMOVE,
+    PeekMessageW, PostThreadMessageW, SetTimer, SetWindowsHookExW, UnhookWindowsHookEx,
+    WH_KEYBOARD_LL, WM_APP, WM_HOTKEY, WM_KEYDOWN, WM_QUIT, WM_SYSKEYDOWN, WM_TIMER,
 };
 
 /// The keys held while another one is pressed.
@@ -50,6 +57,22 @@ impl Modifiers {
             *held = true;
         }
         Some(modifiers)
+    }
+
+    /// The keys as the configuration writes them, in the order Ctrl, Alt,
+    /// Shift and Win, joined by `+`; empty where none is held.
+    pub fn written(self) -> String {
+        let names = [
+            (self.control, "ctrl"),
+            (self.alt, "alt"),
+            (self.shift, "shift"),
+            (self.windows, "win"),
+        ];
+        let held: Vec<&str> = { names.into_iter() }
+            .filter(|(held, _)| *held)
+            .map(|(_, name)| name)
+            .collect();
+        held.join("+")
     }
 
     /// The keys that are down at this moment.
@@ -105,7 +128,7 @@ pub struct Hotkey {
 /// is asked of `RegisterHotKey` and looked for by the keyboard hook that
 /// takes the combinations Windows keeps to itself, so both know the same
 /// keys.
-const NAMED_KEYS: [(&str, u8); 22] = [
+const NAMED_KEYS: &[(&str, u8)] = &[
     ("space", 0x20),
     ("tab", 0x09),
     ("enter", 0x0d),
@@ -130,35 +153,109 @@ const NAMED_KEYS: [(&str, u8); 22] = [
     ("plus", 0xbb),
     ("minus", 0xbd),
     ("backquote", 0xc0),
+    ("semicolon", 0xba),
+    ("slash", 0xbf),
+    ("backslash", 0xdc),
+    ("leftbracket", 0xdb),
+    ("rightbracket", 0xdd),
+    ("quote", 0xde),
+    // The keys of the number pad, which Windows tells apart from the
+    // digits and the signs above the letters.
+    ("num0", 0x60),
+    ("num1", 0x61),
+    ("num2", 0x62),
+    ("num3", 0x63),
+    ("num4", 0x64),
+    ("num5", 0x65),
+    ("num6", 0x66),
+    ("num7", 0x67),
+    ("num8", 0x68),
+    ("num9", 0x69),
+    ("multiply", 0x6a),
+    ("add", 0x6b),
+    ("subtract", 0x6d),
+    ("decimal", 0x6e),
+    ("divide", 0x6f),
+    ("scrolllock", 0x91),
+    ("menu", 0x5d),
 ];
+
+/// The keys that are held rather than pressed, and the locks, which a
+/// recording lets through: Shift, Ctrl, Alt and the Windows keys, each
+/// as either key and as both, Caps Lock and Num Lock.
+const PASSED_THROUGH: [u8; 13] = [
+    0x10, 0x11, 0x12, 0x5b, 0x5c, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0x14, 0x90,
+];
+
+/// How long a recording waits for a combination.
+const RECORDING_TIME: Duration = Duration::from_secs(10);
+
+/// What the hook of a recording posts to its thread once it has an answer.
+const RECORDED: u32 = WM_APP + 1;
 
 impl Hotkey {
     /// The combination `text` names: keys to hold as [`Modifiers::parse`]
     /// takes them, then `+` and the key to press: a digit, a letter, `f1`
-    /// to `f24`, or one of `space`, `tab`, `enter`, `left`, `up`, `right`,
-    /// `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`,
-    /// `backspace`, `escape`, `pause`, `printscreen`, `period`, `comma`,
-    /// `plus`, `minus` and `backquote`.
+    /// to `f24`, or one of the names of [`Self::key_names`], such as
+    /// `space`, `left`, `pageup`, `escape`, `printscreen`, `period`,
+    /// `plus`, `num0` or `add`.
     pub fn parse(id: u32, text: &str) -> Option<Self> {
         let (held, key) = text.rsplit_once('+')?;
-        let key = key.trim().to_ascii_lowercase();
-        let named = NAMED_KEYS.iter().find(|(name, _)| *name == key);
-        let key = match named {
-            Some(&(_, code)) => code,
-            None => match key.as_bytes() {
-                [key] if key.is_ascii_alphanumeric() => key.to_ascii_uppercase(),
-                [b'f', b'1'..=b'9', ..] => match key[1..].parse::<u8>() {
-                    Ok(number @ 1..=24) => 0x6f + number,
-                    _ => return None,
-                },
-                _ => return None,
-            },
-        };
         Some(Self {
             id,
             modifiers: Modifiers::parse(held)?,
-            key,
+            key: Self::key_code(key)?,
         })
+    }
+
+    /// The combination `text` names as [`Self::parse`] takes it, or a key
+    /// pressed by itself, as a step of a sequence after its first may be:
+    /// `t`, `escape`.
+    pub fn step(id: u32, text: &str) -> Option<Self> {
+        if let Some(hotkey) = Self::parse(id, text) {
+            return Some(hotkey);
+        }
+        Some(Self {
+            id,
+            modifiers: Modifiers::default(),
+            key: Self::key_code(text)?,
+        })
+    }
+
+    /// The virtual-key code of the key the configuration calls `name`.
+    pub fn key_code(name: &str) -> Option<u8> {
+        let name = name.trim().to_ascii_lowercase();
+        if let Some(&(_, code)) = NAMED_KEYS.iter().find(|(known, _)| *known == name) {
+            return Some(code);
+        }
+        match name.as_bytes() {
+            [key] if key.is_ascii_alphanumeric() => Some(key.to_ascii_uppercase()),
+            [b'f', b'1'..=b'9', ..] => match name[1..].parse::<u8>() {
+                Ok(number @ 1..=24) => Some(0x6f + number),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The name the configuration gives the key of the virtual-key code
+    /// `code`, where it is one a combination can end with.
+    pub fn key_name(code: u8) -> Option<String> {
+        if let Some((name, _)) = NAMED_KEYS.iter().find(|(_, known)| *known == code) {
+            return Some((*name).to_owned());
+        }
+        match code {
+            b'0'..=b'9' | b'A'..=b'Z' => Some((code as char).to_ascii_lowercase().to_string()),
+            0x70..=0x87 => Some(format!("f{}", code - 0x6f)),
+            _ => None,
+        }
+    }
+
+    /// The names of the keys that are neither a letter, nor a digit, nor
+    /// one of `f1` to `f24`.
+    #[cfg(test)]
+    pub fn key_names() -> impl Iterator<Item = &'static str> {
+        NAMED_KEYS.iter().map(|(name, _)| *name)
     }
 }
 
@@ -167,12 +264,62 @@ impl Hotkey {
 struct Held {
     owned: Vec<(&'static str, Vec<Hotkey>)>,
     watcher: Option<(u32, JoinHandle<()>)>,
+    /// While the combinations are paused, the numbers of those that are
+    /// held all the same.
+    kept: Option<Vec<u32>>,
+    /// Whether a combination is being recorded, while which none is held.
+    recording: bool,
 }
 
 static HELD: Mutex<Held> = Mutex::new(Held {
     owned: Vec::new(),
     watcher: None,
+    kept: None,
+    recording: false,
 });
+
+impl Held {
+    /// Gives up the combinations held now and asks Windows for those of
+    /// every part again, but for those a pause leaves out, and for none
+    /// while a combination is recorded. The numbers of those Windows
+    /// refused are returned.
+    fn hold_again(&mut self) -> anyhow::Result<Vec<u32>> {
+        // The combinations are free again once their thread has ended.
+        if let Some((thread, ended)) = self.watcher.take() {
+            // SAFETY: posting to a thread that has ended fails without
+            // side effects.
+            unsafe { PostThreadMessageW(thread, WM_QUIT, WPARAM(0), LPARAM(0)) }
+                .context("the key combinations before could not be given up")?;
+            ended.join().ok();
+        }
+        if self.recording {
+            return Ok(Vec::new());
+        }
+        let kept = |key: &Hotkey| { self.kept.as_ref() }.is_none_or(|kept| kept.contains(&key.id));
+        let keys: Vec<Hotkey> = { self.owned.iter() }
+            .flat_map(|(_, keys)| keys.iter().copied())
+            .filter(kept)
+            .collect();
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (ready, started) = mpsc::channel();
+        let ended = thread::Builder::new()
+            .name("key combinations".to_owned())
+            .spawn(move || watch(&keys, &ready))
+            .context("the thread that holds the key combinations did not start")?;
+        let (thread, refused): (u32, Vec<u32>) = started
+            .recv()
+            .map_err(|_| anyhow!("the thread that holds the key combinations ended"))?;
+        self.watcher = Some((thread, ended));
+        Ok(refused)
+    }
+}
+
+fn held() -> anyhow::Result<MutexGuard<'static, Held>> {
+    HELD.lock()
+        .map_err(|_| anyhow!("the thread that holds the key combinations failed"))
+}
 
 fn pressed() -> &'static (Sender<u32>, Receiver<u32>) {
     static PRESSED: OnceLock<(Sender<u32>, Receiver<u32>)> = OnceLock::new();
@@ -192,40 +339,193 @@ impl Hotkeys {
     /// of Tessera, in place of its ones before; those of the other parts
     /// stay. The numbers, which no two parts share, of the ones of `keys`
     /// that Windows refused, as it does with a combination another program
-    /// holds, are returned.
+    /// holds, are returned. While a combination is being recorded, none is
+    /// held and none is refused; they are held again once it is recorded.
     pub fn set(owner: &'static str, keys: Vec<Hotkey>) -> anyhow::Result<Vec<u32>> {
-        let mut held = HELD
-            .lock()
-            .map_err(|_| anyhow!("the thread that holds the key combinations failed"))?;
+        let mut held = held()?;
         let own: Vec<u32> = keys.iter().map(|key| key.id).collect();
         held.owned.retain(|(name, _)| *name != owner);
         held.owned.push((owner, keys));
-        let keys: Vec<Hotkey> = { held.owned.iter() }
-            .flat_map(|(_, keys)| keys.iter().copied())
-            .collect();
-        let watcher = &mut held.watcher;
-        // The combinations are free again once their thread has ended.
-        if let Some((thread, ended)) = watcher.take() {
-            // SAFETY: posting to a thread that has ended fails without
-            // side effects.
-            unsafe { PostThreadMessageW(thread, WM_QUIT, WPARAM(0), LPARAM(0)) }
-                .context("the key combinations before could not be given up")?;
-            ended.join().ok();
-        }
-        if keys.is_empty() {
-            return Ok(Vec::new());
-        }
-        let (ready, started) = mpsc::channel();
-        let ended = thread::Builder::new()
-            .name("key combinations".to_owned())
-            .spawn(move || watch(&keys, &ready))
-            .context("the thread that holds the key combinations did not start")?;
-        let (thread, mut refused): (u32, Vec<u32>) = started
-            .recv()
-            .map_err(|_| anyhow!("the thread that holds the key combinations ended"))?;
-        *watcher = Some((thread, ended));
+        let mut refused = held.hold_again()?;
         refused.retain(|id| own.contains(id));
         Ok(refused)
+    }
+
+    /// Holds, of every part's combinations, only those whose numbers are
+    /// `kept`, until it is called with `None`, which holds all of them
+    /// again: the pause of `pause-keys`, which keeps its own keys.
+    pub fn pause(kept: Option<Vec<u32>>) -> anyhow::Result<()> {
+        let mut held = held()?;
+        if held.kept == kept {
+            return Ok(());
+        }
+        held.kept = kept;
+        held.hold_again().map(drop)
+    }
+
+    /// Records the next combination pressed anywhere, as the configuration
+    /// writes it (`ctrl+alt+k`): for that time every combination of
+    /// Tessera is given up, and a keyboard hook takes the keys pressed,
+    /// which reach no program, the Windows key with a letter included.
+    /// Esc by itself, ten seconds without a combination, a second
+    /// recording asked meanwhile and a hook Windows refuses answer `None`.
+    /// The combinations are held again afterwards.
+    pub fn record() -> Receiver<Option<String>> {
+        let (answer, answered) = async_channel::bounded(1);
+        let started = thread::Builder::new()
+            .name("key recording".to_owned())
+            .spawn(move || {
+                answer.try_send(record_here()).ok();
+            });
+        if let Err(error) = started {
+            report!("no combination can be recorded: {error}");
+        }
+        answered
+    }
+}
+
+/// Records a combination on this thread, with every combination given up
+/// meanwhile.
+fn record_here() -> Option<String> {
+    {
+        let mut held = held().ok()?;
+        if held.recording {
+            return None;
+        }
+        held.recording = true;
+        if let Err(error) = held.hold_again() {
+            report!("the key combinations stay held while one is recorded: {error:#}");
+        }
+    }
+    let recorded = listen();
+    match held() {
+        Ok(mut held) => {
+            held.recording = false;
+            if let Err(error) = held.hold_again() {
+                report!("the key combinations are not held again: {error:#}");
+            }
+        }
+        Err(error) => report!("{error:#}"),
+    }
+    recorded
+}
+
+/// What the hook of a recording found, and the thread it tells.
+struct Recording {
+    thread: u32,
+    /// `Some` once it has an answer: a combination, or `None` to cancel.
+    answer: Option<Option<String>>,
+}
+
+static RECORDING: Mutex<Recording> = Mutex::new(Recording {
+    thread: 0,
+    answer: None,
+});
+
+/// What a recording makes of the key of `code` going down while `held` are
+/// down: `None` to wait on, as for a key that cannot end a combination or
+/// one pressed by itself; `Some(None)` for Esc by itself, which cancels;
+/// and the combination otherwise.
+fn recorded(code: u8, held: Modifiers) -> Option<Option<String>> {
+    let name = Hotkey::key_name(code)?;
+    if held != Modifiers::default() {
+        return Some(Some(format!("{}+{name}", held.written())));
+    }
+    (name == "escape").then_some(None)
+}
+
+/// Sets the hook of a recording on this thread and waits for its answer
+/// or for the time to run out; `None` without a combination.
+fn listen() -> Option<String> {
+    let mut message = MSG::default();
+    // SAFETY: `message` outlives the call, which only makes sure the
+    // thread has a queue to post to; the call after it only reads which
+    // thread this is.
+    let thread = unsafe {
+        let _ = PeekMessageW(&raw mut message, None, 0, 0, PM_NOREMOVE);
+        GetCurrentThreadId()
+    };
+    if let Ok(mut recording) = RECORDING.lock() {
+        *recording = Recording {
+            thread,
+            answer: None,
+        };
+    }
+    // SAFETY: `recorded_key` is a function of this program, which is never
+    // unloaded; a low-level hook is called in this process and injects no
+    // module anywhere.
+    let hook = match unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(recorded_key), None, 0) } {
+        Ok(hook) => hook,
+        Err(error) => {
+            report!("the keyboard cannot be listened to for a combination: {error}");
+            return None;
+        }
+    };
+    let time = RECORDING_TIME.as_millis() as u32;
+    // SAFETY: a timer of no window posts its message to this thread's
+    // queue; `message` outlives the calls that fill it, and Windows calls
+    // the hook from inside them. The hook is removed with the handle it
+    // was set with.
+    unsafe {
+        let timer = SetTimer(None, 0, time, None);
+        while GetMessageW(&raw mut message, None, 0, 0).0 > 0 {
+            if message.message == WM_TIMER || message.message == RECORDED {
+                break;
+            }
+        }
+        let _ = KillTimer(None, timer);
+        if let Err(error) = UnhookWindowsHookEx(hook) {
+            report!("the keyboard is still listened to: {error:#}");
+        }
+    }
+    let mut recording = RECORDING.lock().ok()?;
+    recording.thread = 0;
+    recording.answer.take().flatten()
+}
+
+unsafe extern "system" fn recorded_key(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HC_ACTION as i32 {
+        // SAFETY: for this code Windows passes a pointer to the key event,
+        // which is valid for the duration of the call.
+        let event = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+        let key = event.vkCode.min(0xff) as u8;
+        let made_here = event.dwExtraInfo == super::windows_key::MADE_HERE;
+        if !made_here && !PASSED_THROUGH.contains(&key) {
+            if matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN) {
+                take_recorded(key);
+            }
+            // No other key reaches a program while a combination is
+            // recorded.
+            return LRESULT(1);
+        }
+    }
+    // SAFETY: the arguments are passed on as they came.
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+/// Takes in that the key `key` went down while recording, and tells the
+/// thread of the recording once it has its answer.
+fn take_recorded(key: u8) {
+    let Ok(mut recording) = RECORDING.lock() else {
+        return;
+    };
+    if recording.answer.is_some() {
+        return;
+    }
+    let held = Modifiers::down_now();
+    let Some(answer) = recorded(key, held) else {
+        return;
+    };
+    if held.windows {
+        // Windows does not see the key that is kept from it, and would
+        // take the Windows key for pressed by itself.
+        super::windows_key::press_unassigned_key();
+    }
+    recording.answer = Some(answer);
+    // SAFETY: posting to a thread that has ended fails without side
+    // effects.
+    unsafe {
+        let _ = PostThreadMessageW(recording.thread, RECORDED, WPARAM(0), LPARAM(0));
     }
 }
 
@@ -327,6 +627,53 @@ mod tests {
         ] {
             assert_eq!(Hotkey::parse(0, text), None, "{text}");
         }
+    }
+
+    #[test]
+    fn a_step_of_a_sequence_may_be_a_key_by_itself() {
+        let step = |text| Hotkey::step(3, text).map(|key| (key.modifiers, key.key));
+        assert_eq!(step("t"), Some((Modifiers::default(), b'T')));
+        assert_eq!(step("escape"), Some((Modifiers::default(), 0x1b)));
+        let ctrl = Modifiers::parse("ctrl").unwrap();
+        assert_eq!(step("ctrl+num5"), Some((ctrl, 0x65)));
+        assert_eq!(step("capslock"), None);
+        assert_eq!(step(""), None);
+    }
+
+    #[test]
+    fn every_key_has_its_name_back() {
+        for code in 0..=255u8 {
+            if let Some(name) = Hotkey::key_name(code) {
+                assert_eq!(Hotkey::key_code(&name), Some(code), "{name}");
+            }
+        }
+        assert_eq!(Hotkey::key_name(b'K').as_deref(), Some("k"));
+        assert_eq!(Hotkey::key_name(0x7b).as_deref(), Some("f12"));
+        assert_eq!(Hotkey::key_name(0x6b).as_deref(), Some("add"));
+        assert_eq!(Hotkey::key_name(0x10), None, "Shift ends no combination");
+        let names: Vec<&str> = Hotkey::key_names().collect();
+        let mut unique = names.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), names.len(), "a key is named twice");
+    }
+
+    #[test]
+    fn a_recording_takes_a_key_with_keys_held() {
+        let held = |text| Modifiers::parse(text).unwrap();
+        assert_eq!(
+            recorded(b'K', held("win+ctrl")),
+            Some(Some("ctrl+win+k".to_owned()))
+        );
+        assert_eq!(
+            recorded(0x1b, held("win")),
+            Some(Some("win+escape".to_owned()))
+        );
+        assert_eq!(recorded(0x1b, Modifiers::default()), Some(None));
+        assert_eq!(recorded(b'K', Modifiers::default()), None);
+        assert_eq!(recorded(0x14, held("ctrl")), None, "Caps Lock ends none");
+        assert_eq!(held("shift+alt+ctrl+win").written(), "ctrl+alt+shift+win");
+        assert_eq!(Modifiers::default().written(), "");
     }
 
     #[test]

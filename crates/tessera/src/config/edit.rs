@@ -2143,6 +2143,65 @@ impl ConfigFile {
         } else {
             popup.insert(column.key(), Item::Value(Value::Array(list)));
         }
+// shortcuts-editor: whole `[[key]]` entries, as the Shortcuts page writes
+// them. An entry that stays keeps what the user wrote around it, comments
+// included.
+impl ConfigFile {
+    /// Appends `key` as a `[[key]]`.
+    pub fn add_key_entry(&mut self, key: &super::KeyConfig) -> bool {
+        let item = self
+            .document
+            .entry("key")
+            .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+        let Some(keys) = item.as_array_of_tables_mut() else {
+            return false;
+        };
+        keys.push(key_table(key));
+        true
+    }
+
+    /// Puts `key` in place of the `[[key]]` at `index`, with the comments
+    /// above it.
+    pub fn replace_key_entry(&mut self, index: usize, key: &super::KeyConfig) -> bool {
+        let Some(entry) = self.hotkey(index) else {
+            return false;
+        };
+        let mut table = key_table(key);
+        *table.decor_mut() = entry.decor().clone();
+        *entry = table;
+        true
+    }
+
+    /// Takes the `[[key]]` at `index` out.
+    pub fn remove_key_entry(&mut self, index: usize) -> bool {
+        self.remove_hotkey(index)
+    }
+
+    /// Makes `keys` the `[[key]]` entries of the file, in their order. An
+    /// entry the file has already is kept as it is written there.
+    pub fn set_key_entries(&mut self, keys: &[super::KeyConfig]) -> bool {
+        let mut written: Vec<(super::KeyConfig, Table)> = Vec::new();
+        let old = self.document.remove("key");
+        if let Some(old) = old.as_ref().and_then(Item::as_array_of_tables) {
+            for table in old.iter() {
+                if let Some(key) = key_of_table(table) {
+                    written.push((key, table.clone()));
+                }
+            }
+        }
+        if keys.is_empty() {
+            return true;
+        }
+        let mut entries = ArrayOfTables::new();
+        for key in keys {
+            let kept = written.iter().position(|(known, _)| known == key);
+            let table = match kept {
+                Some(at) => written.remove(at).1,
+                None => key_table(key),
+            };
+            entries.push(table);
+        }
+        self.document.insert("key", Item::ArrayOfTables(entries));
         true
     }
 }
@@ -2671,5 +2730,116 @@ arg = "calendar"
         let config = edited.config().expect("it stays usable");
         assert!(config.popups.is_empty());
         assert!(!edited.document.to_string().contains("[[popup]]"));
+/// `key` as a `[[key]]` table of the file, its fields in the order the
+/// configuration documents them.
+pub fn key_table(key: &super::KeyConfig) -> Table {
+    let mut table = Table::new();
+    table.insert("press", value(key.press.as_str()));
+    let texts = [
+        ("popup", &key.popup),
+        ("tiling", &key.tiling),
+        ("focus", &key.focus),
+        ("move", &key.carry),
+        ("switch", &key.switch),
+        ("files", &key.files),
+        ("action", &key.action),
+        ("arg", &key.arg),
+    ];
+    for (name, text) in texts {
+        if let Some(text) = text {
+            table.insert(name, value(text.as_str()));
+        }
+    }
+    if let Some(run) = &key.run {
+        let run: Array = run.iter().map(String::as_str).collect();
+        table.insert("run", value(run));
+    }
+    if let Some(dock) = key.dock {
+        table.insert("dock", value(i64::from(dock)));
+    }
+    table
+}
+
+/// What the `[[key]]` table `table` asks for, where it can be read.
+fn key_of_table(table: &Table) -> Option<super::KeyConfig> {
+    let mut whole = DocumentMut::new();
+    whole.extend(table.iter().map(|(key, item)| (key, item.clone())));
+    toml::from_str(&whole.to_string()).ok()
+}
+
+#[cfg(test)]
+mod key_entry_tests {
+    use super::*;
+    use crate::config::KeyConfig;
+
+    fn opening(press: &str, action: &str, arg: Option<&str>) -> KeyConfig {
+        KeyConfig {
+            press: press.to_owned(),
+            action: Some(action.to_owned()),
+            arg: arg.map(str::to_owned),
+            ..KeyConfig::default()
+        }
+    }
+
+    #[test]
+    fn whole_entries_are_added_replaced_and_taken_out() {
+        let text = "# My keys.\n\n# The launcher.\n[[key]]\npress = \"ctrl+alt+l\"\npopup = \"launcher\"\n";
+        let mut file = ConfigFile::parse(text).unwrap();
+        let notepad = KeyConfig {
+            press: "ctrl+alt+n".to_owned(),
+            run: Some(vec!["notepad.exe".to_owned(), "a b.txt".to_owned()]),
+            ..KeyConfig::default()
+        };
+        assert!(file.add_key_entry(&notepad));
+        assert!(file.add_key_entry(&opening("win+d", "none", None)));
+        let keys = file.config().unwrap().keys;
+        assert_eq!(keys.len(), 3);
+        assert_eq!(keys[1], notepad);
+        assert_eq!(keys[2].action.as_deref(), Some("none"));
+        let window = opening("ctrl+alt+e", "activate-window", Some("exe:code.exe"));
+        assert!(file.replace_key_entry(0, &window));
+        assert!(!file.replace_key_entry(3, &window));
+        let text = file.document.to_string();
+        assert!(
+            text.contains("# The launcher.\n[[key]]\npress = \"ctrl+alt+e\""),
+            "{text}"
+        );
+        assert_eq!(file.config().unwrap().keys[0], window);
+        assert!(file.remove_key_entry(2));
+        assert!(!file.remove_key_entry(2));
+        assert_eq!(file.config().unwrap().keys.len(), 2);
+    }
+
+    #[test]
+    fn a_scheme_keeps_the_entries_it_shares_with_the_file() {
+        let text = "[[key]]\n# Kept as it is.\npress = \"ctrl+alt+l\"\npopup = \"launcher\"\n\n[[key]]\npress = \"ctrl+alt+m\"\npopup = \"media\"\n";
+        let mut file = ConfigFile::parse(text).unwrap();
+        let kept = KeyConfig {
+            press: "ctrl+alt+l".to_owned(),
+            popup: Some("launcher".to_owned()),
+            ..KeyConfig::default()
+        };
+        let new = opening("win+alt+p", "pause-keys", None);
+        assert!(file.set_key_entries(&[new.clone(), kept.clone()]));
+        assert_eq!(file.config().unwrap().keys, [new, kept]);
+        assert!(file.document.to_string().contains("# Kept as it is."));
+        assert!(file.set_key_entries(&[]));
+        assert!(!file.document.contains_key("key"));
+        file.config().expect("it stays usable");
+    }
+
+    #[test]
+    fn every_field_of_an_entry_is_written() {
+        let key = KeyConfig {
+            press: "ctrl+alt+k, t".to_owned(),
+            focus: Some("left".to_owned()),
+            carry: Some("right".to_owned()),
+            dock: Some(3),
+            files: Some("~".to_owned()),
+            switch: Some("next".to_owned()),
+            tiling: Some("grid".to_owned()),
+            ..opening("x", "none", Some("y"))
+        };
+        assert_eq!(key_of_table(&key_table(&key)), Some(key));
     }
 }

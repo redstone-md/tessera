@@ -34,6 +34,7 @@ use anyhow::bail;
 use gpui::{App, Global};
 
 use crate::config::KeyConfig;
+use crate::keys::{NO_ACTION, PAUSE_ACTION, Shortcuts};
 use crate::module::Module;
 use crate::platform::Modifiers;
 use crate::shell::Shell;
@@ -162,15 +163,32 @@ impl Actions {
     /// `popup` opens the popup its argument names, or closes it, as the
     /// `popup` of a `[[key]]` does; as an action it also takes its keys
     /// from Windows where it keeps them, such as Win+V for a clipboard
-    /// popup.
-    pub(crate) fn builtin() -> [(&'static str, Action); 1] {
+    /// popup. `none` does nothing: a `[[key]]` of it turns off the key an
+    /// action brings, which then stays with Windows or whoever holds it.
+    /// `pause-keys` pauses every combination of Tessera but its own keys,
+    /// or holds them again: without an argument it does the other of the
+    /// two, `on` pauses and `off` holds them again.
+    pub(crate) fn builtin() -> Vec<(&'static str, Action)> {
         let popup = Action::new(|name, cx| Shell::toggle_popup(name.unwrap_or_default(), cx))
             .taking_reserved_keys()
             .checking(|name| match name {
                 Some(name) if !name.is_empty() => Ok(()),
                 _ => Err("`popup` takes the name of a popup as `arg`".to_owned()),
             });
-        [("popup", popup)]
+        let none = Action::new(|_, _| {});
+        let pause = Action::new(|arg, cx| {
+            let pause = match arg {
+                Some("on") => Some(true),
+                Some("off") => Some(false),
+                _ => None,
+            };
+            Shortcuts::pause(pause, cx);
+        })
+        .checking(|arg| match arg {
+            None | Some("on" | "off") => Ok(()),
+            Some(_) => Err(format!("`{PAUSE_ACTION}` takes `on`, `off` or no `arg`")),
+        });
+        vec![("popup", popup), (NO_ACTION, none), (PAUSE_ACTION, pause)]
     }
 
     /// Makes `action` available as `name`. A name that is taken already
@@ -376,5 +394,11 @@ mod tests {
         assert!(actions.takes_reserved_keys("popup"));
         assert_eq!(actions.check("popup", Some("launcher")), Ok(()));
         assert!(actions.check("popup", None).is_err());
+        assert_eq!(actions.check(NO_ACTION, None), Ok(()));
+        assert!(!actions.takes_reserved_keys(NO_ACTION));
+        assert_eq!(actions.check(PAUSE_ACTION, None), Ok(()));
+        assert_eq!(actions.check(PAUSE_ACTION, Some("on")), Ok(()));
+        assert!(actions.check(PAUSE_ACTION, Some("soon")).is_err());
+        assert!(actions.default_keys().is_empty(), "they bring no keys");
     }
 }
