@@ -957,8 +957,14 @@ mod tests {
             duplicate_name("report.final.txt", "{} - Copy", false),
             "report.final - Copy.txt"
         );
-        assert_eq!(duplicate_name("Photos.2026", "{} - Copy", true), "Photos.2026 - Copy");
-        assert_eq!(duplicate_name(".gitignore", "{} - Copy", false), ".gitignore - Copy");
+        assert_eq!(
+            duplicate_name("Photos.2026", "{} - Copy", true),
+            "Photos.2026 - Copy"
+        );
+        assert_eq!(
+            duplicate_name(".gitignore", "{} - Copy", false),
+            ".gitignore - Copy"
+        );
     }
 
     #[test]

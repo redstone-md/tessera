@@ -1,3 +1,12 @@
 # Rows of the settings filled by files-search-actions. Format: modules/settings/rows.rs
 # (RowCard, and [[action]] titles). Plain labels are English texts of the
 # RUSSIAN table in i18n.rs.
+
+# The actions of the menus of files: [[file_action]], edited on a page of
+# their own.
+
+[[card]]
+section = "Files"
+title = "Actions of the file menus"
+page = "file-actions"
+search = ["service menu", "context menu", "file_action", "command"]
