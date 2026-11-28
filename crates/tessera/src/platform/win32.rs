@@ -32,6 +32,7 @@ mod explorer_view;
 mod file_jobs;
 mod file_op;
 mod files;
+mod focus_assist;
 mod folder_handler;
 mod fonts;
 mod hdr;
@@ -99,6 +100,7 @@ mod terminal;
 mod thumbnail;
 mod thumbnails;
 mod tile_border;
+mod toast_activation;
 mod touch_keyboard;
 mod tray;
 mod uninstall;
@@ -112,6 +114,7 @@ mod wifi;
 mod window_ops;
 mod windows_key;
 mod winlogon;
+mod wpn;
 mod zones;
 
 pub use accent::{accent_color, light_mode, set_light_mode};
@@ -162,6 +165,7 @@ pub use files::{
     show_properties,
 };
 pub use files::{reveal, reveal_with};
+pub use focus_assist::{AppNotificationSettings, QuietProfile, WindowsQuiet};
 pub use folder_handler::{FilesStart, start_detached};
 pub use folder_handler::{
     FolderHandler, known_folder_path, start_explorer, started_by_files_fallback, tell_problem,
@@ -191,7 +195,9 @@ pub use move_watch::{MoveEvent, MoveWatch};
 pub use net_drives::{DriveDialog, NetworkDrives};
 pub use network::{Link, Network};
 pub use night_light::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLight};
+pub use notifications::NotificationSound;
 pub use notifications::Occupation;
+pub use notifications::tessera_in_front;
 pub use notifications::{Notification, Notifications};
 pub use open_with::{OpenWithHandler, choose_app};
 pub use overlays::{CloudState, Overlays};
@@ -246,6 +252,7 @@ pub use terminal::{terminal, windows_terminal};
 pub use thumbnail::Thumbnail;
 pub use thumbnails::{LARGEST_THUMBNAIL, ThumbnailKind, Thumbnails};
 pub use tile_border::TileBorder;
+pub use toast_activation::{Activated, ToastActivation, ToastRoute};
 pub use touch_keyboard::TouchKeyboard;
 pub use tray::BalloonKind;
 pub use tray::TrayPromotion;
@@ -266,6 +273,7 @@ pub use winlogon::{
     ExplorerShell, NextShell, SHELL_FLAG, ShellRegistration, attach_console, is_safe_mode,
     own_program_name, recovery_keys_held,
 };
+pub use wpn::{NotificationDatabase, package_data_folder, package_folder};
 pub use zones::SystemZone;
 
 use std::ffi::c_void;
