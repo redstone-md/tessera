@@ -18,12 +18,19 @@
 //! The tiled window in front can be told apart by its border, which
 //! Windows draws in a color of the theme while it is asked to, or which
 //! Tessera draws itself.
+//!
+//! Windows can be stacked: they take turns in one tile, below a bar of
+//! tabs (see [`stack_bar`]). Those behind the one in front stay where
+//! they are, just behind it, so that the dock, the switcher and Task
+//! View still show them; the one that comes in front, by a click on its
+//! tab or as the user switches to it, is the one in front of its stack.
 
 mod command;
 mod config;
 mod declarative;
 mod displays;
 mod layouts;
+mod stack_bar;
 mod state;
 mod tiles;
 mod tree;
@@ -35,16 +42,17 @@ use std::time::{Duration, Instant};
 use gpui::{App, AsyncApp, Global, Hsla, SharedString};
 
 pub use command::{TilingCommand, parse_command};
-pub use config::TilingConfig;
+pub use config::{OverrideKind, TilingConfig};
 pub use layouts::TileLayout;
 
 use layouts::LayoutChoice;
 
 use command::words;
-use config::{DragMode, Knobs, Marking, argb};
+use config::{AutoStack, DragMode, Knobs, Marking, argb};
 use declarative::Library;
 use displays::DisplayName;
-use state::{Kept, PlaceKey};
+use stack_bar::{BarLook, StackBars, StackDeed, Tab};
+use state::{Kept, PlaceKey, WindowKey};
 use tiles::{Layout, Tiles, same_size};
 use tree::Axis;
 
@@ -55,8 +63,9 @@ use crate::keys::Shortcuts;
 use crate::motion::{Spring, SpringSpec, mix};
 use crate::platform::{
     AppWindow, AppWindowId, Display, DisplayKey, MoveEvent, MoveWatch, ScreenRect, TileBorder,
-    WindowEvents, pointer_held,
+    WindowEvents, pointer_at, pointer_held,
 };
+use crate::rules::Rules;
 use crate::shell::KnownDisplays;
 use crate::theme::Theme;
 use crate::ui::spread::{between, center, holds, reach};
@@ -87,14 +96,24 @@ const LONGEST_HOLD: Duration = Duration::from_secs(60);
 const LAYOUTS_DIRECTORY: &str = "tiling-layouts";
 
 /// The keys the action `tiling` has by default where the keys of Windows
-/// are in use, while tiling is on: where the next window opens, and every
-/// tile alike again.
+/// are in use, while tiling is on: where the next window opens, every
+/// tile alike again, and the stacks: the window in front into the stack
+/// of the tile on a side, out of its stack, through the windows of its
+/// stack, and the next window into its stack.
 pub(crate) const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("win+shift+i", "reserve up"),
     ("win+shift+k", "reserve down"),
     ("win+shift+j", "reserve left"),
     ("win+shift+l", "reserve right"),
     ("win+alt+0", "reset"),
+    ("win+ctrl+alt+left", "stack left"),
+    ("win+ctrl+alt+right", "stack right"),
+    ("win+ctrl+alt+up", "stack up"),
+    ("win+ctrl+alt+down", "stack down"),
+    ("win+alt+u", "unstack"),
+    ("win+alt+period", "cycle-stack next"),
+    ("win+alt+comma", "cycle-stack prev"),
+    ("win+shift+u", "reserve stack"),
 ];
 
 /// A side of a window, as a key combination names it.
@@ -247,6 +266,7 @@ type Sent = (ScreenRect, Option<ScreenRect>);
 /// A display as it was looked at, with the workspace it shows.
 struct Seen {
     key: DisplayKey,
+    display: Display,
     name: DisplayName,
     /// What the bars leave of it.
     work: ScreenRect,
@@ -259,10 +279,21 @@ struct Seen {
 struct Look {
     displays: Vec<Seen>,
     front: Option<AppWindowId>,
+    /// The category the window rules give each window, where windows
+    /// join stacks by their category.
+    categories: HashMap<AppWindowId, &'static str>,
 }
 
 impl Look {
     fn now(cx: &App) -> Self {
+        let grouping =
+            { cx.try_global::<Tiler>() }.is_some_and(|tiler| tiler.config.auto_stack().any());
+        let categories = match grouping {
+            true => { AppWindow::enumerate().into_iter() }
+                .filter_map(|window| Some((window.id, Rules::of(&window, cx).category?)))
+                .collect(),
+            false => HashMap::new(),
+        };
         let displays = Display::all();
         let frames: Vec<ScreenRect> = displays.iter().map(|display| display.frame).collect();
         let names = displays::names(&frames, KnownDisplays::all(cx));
@@ -279,6 +310,7 @@ impl Look {
                 };
                 Seen {
                     key: display.key,
+                    display,
                     name,
                     work: display.work,
                     workspace,
@@ -289,6 +321,7 @@ impl Look {
         Self {
             displays,
             front: AppWindowId::foreground(),
+            categories,
         }
     }
 
@@ -386,6 +419,21 @@ pub struct Tiler {
     layouts_stamp: Option<u64>,
     layouts_looked: Option<Instant>,
     scanning: bool,
+    /// What each stacked window is known by after a restart.
+    identities: HashMap<AppWindowId, WindowKey>,
+    /// The windows of stacks put just behind the window in front of their
+    /// stack, behind which and where.
+    layered: HashMap<AppWindowId, (AppWindowId, ScreenRect)>,
+    /// Whether the windows of the stacks are to be put behind each other
+    /// again once no window moves.
+    layer_due: bool,
+    /// Windows dropped on the bar of a stack, each with the window in
+    /// front of that stack.
+    dropped: Vec<(AppWindowId, AppWindowId)>,
+    /// The bars of tabs as they are to be shown, and whether they are to
+    /// be shown so at the next look.
+    bars: Vec<BarLook>,
+    bars_due: bool,
 }
 
 impl Global for Tiler {}
@@ -435,6 +483,12 @@ impl Tiler {
             layouts_stamp: scan.map(|scan| scan.stamp),
             layouts_looked: Some(Instant::now()),
             scanning: false,
+            identities: HashMap::new(),
+            layered: HashMap::new(),
+            layer_due: false,
+            dropped: Vec::new(),
+            bars: Vec::new(),
+            bars_due: false,
         };
         this.pending = this.kept_text();
         this.written = this.pending.clone();
@@ -509,10 +563,14 @@ impl Tiler {
         let this = cx.global_mut::<Self>();
         if !enabled {
             this.put_back();
+            this.bars.clear();
         } else if !WindowEvents::watch() {
             report!("Windows does not report window changes, so tiles follow them late");
         }
         this.nudged = true;
+        if !enabled {
+            StackBars::show(Vec::new(), Self::stack_deed, cx);
+        }
         cx.set_global(mode);
         // The keys of tiling by default are left to other programs while
         // tiling is off, when they would do nothing.
@@ -548,7 +606,18 @@ impl Tiler {
         cx.spawn(async move |cx: &mut AsyncApp| {
             while let Ok(event) = events.recv().await {
                 let heard = cx.update(|cx| {
+                    // A window let go of over the bar of a stack joins it.
+                    let dropped = match event {
+                        MoveEvent::End(id) => { pointer_at() }
+                            .and_then(|point| Self::bar_at(id, point, cx))
+                            .map(|front| (id, front)),
+                        _ => None,
+                    };
                     let this = cx.global_mut::<Self>();
+                    if let Some(dropped) = dropped {
+                        this.dropped.push(dropped);
+                        this.nudged = true;
+                    }
                     match event {
                         MoveEvent::Start(id) if this.managed.contains(&id) => {
                             this.held.insert(id, Instant::now());
@@ -652,6 +721,14 @@ impl Tiler {
             front_layout = this.front_layout(look);
         }
         this.step(Instant::now());
+        if this.moves.is_empty() && std::mem::take(&mut this.layer_due) {
+            this.layer();
+        }
+        if std::mem::take(&mut this.bars_due) {
+            let bars = this.bars.clone();
+            StackBars::show(bars, Self::stack_deed, cx);
+        }
+        let this = cx.global_mut::<Self>();
         let fading = this.mark(mode.enabled, fade, theme.motion.effects);
         let write = this.due_write();
         let scan = (mode.enabled && this.layouts_due()).then_some(this.layouts_stamp);
@@ -763,7 +840,145 @@ impl Tiler {
             TilingCommand::Reserve(reserve) => {
                 Self::change(cx, |tiles, _, _, _, _| tiles.reserve = Some(reserve));
             }
+            TilingCommand::Stack(toward) => Self::stack_toward(toward, cx),
+            TilingCommand::Unstack => {
+                if let Some(front) = AppWindowId::foreground() {
+                    Self::unstack(front, cx);
+                }
+            }
+            TilingCommand::CycleStack(back) => {
+                if let Some(front) = AppWindowId::foreground() {
+                    Self::cycle_stack(front, back, cx);
+                }
+            }
         }
+    }
+
+    /// Does what the bar of a stack asks.
+    fn stack_deed(deed: StackDeed, cx: &mut App) {
+        match deed {
+            StackDeed::Activate(id) => {
+                id.activate();
+                Self::in_place_of(id, cx, |tiles, _, area, gap| tiles.activate(id, area, gap));
+            }
+            StackDeed::Close(id) => id.close(),
+            StackDeed::Cycle(id, back) => Self::cycle_stack(id, back, cx),
+            StackDeed::Unstack(id) => Self::unstack(id, cx),
+        }
+    }
+
+    /// Has the window in front join the stack of the tile on the side
+    /// `toward` of it.
+    fn stack_toward(toward: Toward, cx: &mut App) {
+        let enabled = cx.global::<TilingMode>().enabled;
+        let look = Look::now(cx);
+        let spring = cx.global::<Theme>().motion.spatial;
+        let this = cx.global_mut::<Self>();
+        let Some((front, other, true)) = this.beside(toward).filter(|_| enabled) else {
+            return;
+        };
+        let Some(shown) = this.shown_of(front) else {
+            return;
+        };
+        let place = shown.place.clone();
+        let layout = layout_of(&this.library, &shown.layout);
+        let stacked = { this.places.get_mut(&place) }
+            .is_some_and(|tiles| tiles.stack_with(front, other, layout));
+        if stacked {
+            this.carried = true;
+            this.arrange(&look, spring);
+            this.note();
+        }
+    }
+
+    /// Takes the window `id` out of its stack, into a tile of its own.
+    fn unstack(id: AppWindowId, cx: &mut App) {
+        Self::in_place_of(id, cx, |tiles, layout, area, gap| {
+            tiles.unstack(id, layout, area, gap)
+        });
+    }
+
+    /// Brings the window after the one in front of the stack of `id` in
+    /// front, or the one before it with `back`.
+    fn cycle_stack(id: AppWindowId, back: bool, cx: &mut App) {
+        let mut next = None;
+        Self::in_place_of(id, cx, |tiles, _, area, gap| {
+            next = tiles.cycle(id, back, area, gap);
+            next.is_some()
+        });
+        if let Some(next) = next {
+            next.activate();
+        }
+    }
+
+    /// Changes the tiles of the place the window `id` is tiled in with
+    /// `change`, given the layout, area and gap of the place, and arranges
+    /// the windows again where it says something changed.
+    fn in_place_of(
+        id: AppWindowId,
+        cx: &mut App,
+        change: impl FnOnce(&mut Tiles, Layout, ScreenRect, i32) -> bool,
+    ) {
+        if !cx.global::<TilingMode>().enabled {
+            return;
+        }
+        let look = Look::now(cx);
+        let spring = cx.global::<Theme>().motion.spatial;
+        let this = cx.global_mut::<Self>();
+        let Some(shown) = this.shown_of(id) else {
+            return;
+        };
+        let (place, area, gap) = (shown.place.clone(), shown.area, shown.gap);
+        let layout = layout_of(&this.library, &shown.layout);
+        let changed =
+            { this.places.get_mut(&place) }.is_some_and(|tiles| change(tiles, layout, area, gap));
+        if changed {
+            this.carried = true;
+            this.arrange(&look, spring);
+            this.note();
+        }
+    }
+
+    /// The window in front of the stack whose bar is at `point`, unless
+    /// `id` is a window of that stack already.
+    fn bar_at(id: AppWindowId, (x, y): (i32, i32), cx: &App) -> Option<AppWindowId> {
+        let this = cx.try_global::<Self>()?;
+        if !cx
+            .try_global::<TilingMode>()
+            .is_some_and(|mode| mode.enabled)
+        {
+            return None;
+        }
+        let bar = { this.bars.iter() }.find(|bar| {
+            let rect = bar.rect;
+            (rect.left..rect.right).contains(&x) && (rect.top..rect.bottom).contains(&y)
+        })?;
+        if bar.tabs.iter().any(|tab| tab.id == id) {
+            return None;
+        }
+        bar.front()
+    }
+
+    /// Puts each window of a stack that is not in front just behind the
+    /// one that is, where it is not already.
+    fn layer(&mut self) {
+        let mut layered = HashMap::new();
+        for shown in &self.shown {
+            let Some(tiles) = self.places.get(&shown.place) else {
+                continue;
+            };
+            for group in tiles.groups(shown.area, shown.gap) {
+                let tile = group.tile();
+                for &id in group.windows.iter().filter(|&&id| id != group.active) {
+                    let wanted = (group.active, tile);
+                    if self.layered.get(&id) != Some(&wanted) {
+                        id.place_behind(group.active, tile);
+                    }
+                    layered.insert(id, wanted);
+                }
+            }
+        }
+        self.layered = layered;
     }
 
     /// Changes the tiles of the workspace of the display in front with
@@ -856,6 +1071,18 @@ impl Tiler {
         } else {
             Self::set_enabled(false, cx);
         }
+    }
+
+    /// Every layout there is, each as `layout` names it in the
+    /// configuration and as it is called in the language of the user.
+    pub fn layout_names(cx: &App) -> Vec<(String, String)> {
+        let Some(this) = cx.try_global::<Self>() else {
+            return Vec::new();
+        };
+        let language = Language::of(cx);
+        { this.choices().into_iter() }
+            .map(|choice| (choice.name(), this.title(&choice, language)))
+            .collect()
     }
 
     /// Every layout there is: Tessera's own, then those of files.
@@ -976,8 +1203,9 @@ impl Tiler {
     fn following(&self, back: bool) -> Option<AppWindowId> {
         let front = AppWindowId::foreground()?;
         let shown = self.shown_of(front)?;
-        let ids = self.places.get(&shown.place)?.windows();
-        let at = ids.iter().position(|&id| id == front)?;
+        let tiles = self.places.get(&shown.place)?;
+        let ids = tiles.windows();
+        let at = tiles.slot_of(front)?;
         let other = ids[around(at, ids.len(), back)];
         (other != front).then_some(other)
     }
@@ -1176,6 +1404,15 @@ impl Tiler {
         // while it is minimized or maximized.
         self.before.retain(|id, _| id.frame().is_some());
 
+        // Windows dropped on the bar of a stack join it, rather than
+        // being looked at as dropped on a tile.
+        for (id, front) in std::mem::take(&mut self.dropped) {
+            self.ended.retain(|&ended| ended != id);
+            if present(&id) {
+                self.drop_into(id, front);
+            }
+        }
+
         // Windows let go of, and the window in front, which a program may
         // have resized: one dropped on another tile trades places with
         // it, and one resized by a border moves that border.
@@ -1197,7 +1434,7 @@ impl Tiler {
             let Some(tiles) = self.places.get(&shown.place) else {
                 continue;
             };
-            for &id in tiles.windows() {
+            for id in tiles.all() {
                 if self.moves.contains_key(&id) {
                     belongs.entry(id).or_insert(shown.display);
                 }
@@ -1218,14 +1455,38 @@ impl Tiler {
                 .collect();
             let place = self.config.place(&seen.name, seen.workspace);
             let tiles = tiles_of(&mut self.places, &mut self.kept, seen);
+            tiles.bars = self.knobs.bars;
             let choice = tiles.chosen.clone().unwrap_or(place.layout.clone());
             let layout = layout_of(&self.library, &choice);
             let area = place.area(seen.work);
+            // The windows that come may join a stack: one kept from an
+            // earlier run, or one of a window of the same category.
+            let auto = self.config.auto_stack();
+            if !tiles.kept_stacks.is_empty() || auto.any() {
+                let keyed = !tiles.kept_stacks.is_empty();
+                let candidates: Vec<Candidate> = { windows.iter() }
+                    .filter(|window| present.contains(&window.id))
+                    .map(|window| Candidate {
+                        id: window.id,
+                        held: tiles.holds(window.id),
+                        category: look.categories.get(&window.id).copied(),
+                        key: keyed.then(|| identity(window)),
+                    })
+                    .collect();
+                if candidates.iter().any(|candidate| !candidate.held) {
+                    tiles.joins = joins_of(&candidates, &mut tiles.kept_stacks, auto);
+                }
+            }
             for id in tiles.fit(&present, layout, look.front, area, place.gap) {
                 floated.push((id, seen.work));
             }
+            // A window of a stack the user brought in front, as by
+            // switching to it, is the one in front of its stack.
+            if let Some(front) = look.front {
+                tiles.activate(front, area, place.gap);
+            }
             places.extend(tiles.places(area, place.gap));
-            self.managed.extend(tiles.windows().iter().copied());
+            self.managed.extend(tiles.all());
             self.shown.push(Shown {
                 display: seen.key,
                 place: seen.place.clone(),
@@ -1238,6 +1499,10 @@ impl Tiler {
             self.floating.insert(id);
             self.float_out(id, Some(work), false, spring);
         }
+        self.know_stacked(&windows);
+        self.bars = self.bar_looks(look, &windows);
+        self.bars_due = true;
+        self.layer_due = true;
 
         for (id, tile) in places {
             let Some(frame) = id.frame() else {
@@ -1364,7 +1629,7 @@ impl Tiler {
         let Some(tiles) = self.places.get_mut(&target_place) else {
             return;
         };
-        let to = other.and_then(|other| tiles.windows().iter().position(|&listed| listed == other));
+        let to = other.and_then(|other| tiles.slot_of(other));
         let swapping = self.knobs.drag == DragMode::Swap && other.is_some();
         if let (true, Some(other)) = (swapping, other) {
             tiles.take(other, target_layout);
@@ -1378,6 +1643,94 @@ impl Tiler {
             tiles.put(id, at, target_layout, target_area, target_gap);
         }
         self.claimed.insert(id, target_display);
+    }
+
+    /// Has the window `id`, let go of over the bar of the stack whose
+    /// window in front is `front`, join that stack, from wherever it was.
+    fn drop_into(&mut self, id: AppWindowId, front: AppWindowId) {
+        let holding = |shown: &&Shown| {
+            let tiles = self.places.get(&shown.place);
+            move |window: AppWindowId| tiles.is_some_and(|tiles| tiles.holds(window))
+        };
+        let Some(target) = self.shown.iter().find(|shown| holding(shown)(front)) else {
+            return;
+        };
+        let (place, display) = (target.place.clone(), target.display);
+        let layout = layout_of(&self.library, &target.layout);
+        let source = { self.shown.iter() }
+            .find(|shown| holding(shown)(id))
+            .map(|shown| (shown.place.clone(), layout_of(&self.library, &shown.layout)));
+        match source {
+            Some((source, _)) if source == place => {
+                if let Some(tiles) = self.places.get_mut(&place) {
+                    tiles.stack_with(id, front, layout);
+                }
+            }
+            Some((source, source_layout)) => {
+                if let Some(tiles) = self.places.get_mut(&source) {
+                    tiles.take(id, source_layout);
+                }
+                if let Some(tiles) = self.places.get_mut(&place) {
+                    tiles.join(id, front);
+                }
+            }
+            None => {
+                self.floating.remove(&id);
+                if let Some(tiles) = self.places.get_mut(&place) {
+                    tiles.join(id, front);
+                }
+            }
+        }
+        self.claimed.insert(id, display);
+    }
+
+    /// Takes in what the windows of the stacks are known by, of
+    /// `windows`, the windows there are.
+    fn know_stacked(&mut self, windows: &[AppWindow]) {
+        let stacked: HashSet<AppWindowId> = { self.places.values() }
+            .flat_map(|tiles| tiles.stacks().iter())
+            .flat_map(|stack| stack.windows().iter().copied())
+            .collect();
+        self.identities.retain(|id, _| stacked.contains(id));
+        for window in windows.iter().filter(|window| stacked.contains(&window.id)) {
+            self.identities.insert(window.id, identity(window));
+        }
+    }
+
+    /// The bars of tabs over the stacks of the places shown, as `look`
+    /// saw the displays and `windows` are.
+    fn bar_looks(&self, look: &Look, windows: &[AppWindow]) -> Vec<BarLook> {
+        let mut bars = Vec::new();
+        for shown in &self.shown {
+            let (Some(tiles), Some(seen)) = (self.places.get(&shown.place), look.of(shown.display))
+            else {
+                continue;
+            };
+            for group in tiles.groups(shown.area, shown.gap) {
+                let Some(rect) = group.bar_rect() else {
+                    continue;
+                };
+                let tabs: Vec<Tab> = { group.windows.iter() }
+                    .map(|&id| Tab {
+                        id,
+                        title: id.title(),
+                        program: { windows.iter() }
+                            .find(|window| window.id == id)
+                            .and_then(AppWindow::program),
+                    })
+                    .collect();
+                let active = { group.windows.iter() }
+                    .position(|&id| id == group.active)
+                    .unwrap_or_default();
+                bars.push(BarLook {
+                    rect,
+                    display: seen.display,
+                    tabs,
+                    active,
+                });
+            }
+        }
+        bars
     }
 
     fn send(&mut self, id: AppWindowId, from: ScreenRect, to: ScreenRect, spring: SpringSpec) {
@@ -1452,7 +1805,10 @@ impl Tiler {
     fn kept_text(&self) -> String {
         let mut kept = self.kept.clone();
         for (key, tiles) in &self.places {
-            kept.insert(key.clone(), tiles.kept());
+            kept.insert(
+                key.clone(),
+                tiles.kept(|id| self.identities.get(&id).cloned()),
+            );
         }
         state::to_text(&kept)
     }
@@ -1576,6 +1932,89 @@ fn tiles_of<'a>(
     })
 }
 
+/// A window that may join a stack as it comes.
+struct Candidate {
+    id: AppWindowId,
+    /// Whether it is tiled in the place already.
+    held: bool,
+    /// Its category, as the window rules give it.
+    category: Option<&'static str>,
+    /// What it is known by, where kept stacks are to be made again.
+    key: Option<WindowKey>,
+}
+
+/// What the window `window` is known by after a restart.
+fn identity(window: &AppWindow) -> WindowKey {
+    let exe = { window.executable.as_deref() }
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    WindowKey {
+        exe,
+        class: window.id.class(),
+        title: window.id.title(),
+    }
+}
+
+/// Which windows of `windows`, the windows of a place in their order,
+/// join the stack of which other window as they come: the windows of a
+/// stack of `kept` once two of them are there (the stack is then taken
+/// out of `kept`), and a window whose category `auto` names, which joins
+/// the first window of its category that is tiled there, or else the
+/// first that comes with it.
+fn joins_of(
+    windows: &[Candidate],
+    kept: &mut Vec<Vec<WindowKey>>,
+    auto: &AutoStack,
+) -> Vec<(AppWindowId, AppWindowId)> {
+    let mut joins: Vec<(AppWindowId, AppWindowId)> = Vec::new();
+    let mut used: HashSet<AppWindowId> = HashSet::new();
+    kept.retain(|stack| {
+        let mut found = Vec::new();
+        for key in stack {
+            let best = { windows.iter() }
+                .filter(|window| !used.contains(&window.id) && !found.contains(&window.id))
+                .filter_map(|window| {
+                    let known = window.key.as_ref()?;
+                    let fit = key.fit(&known.exe, &known.class, &known.title)?;
+                    Some((fit, window.id))
+                })
+                .max_by_key(|&(fit, _)| fit);
+            if let Some((_, id)) = best {
+                found.push(id);
+            }
+        }
+        if found.len() < 2 {
+            return true;
+        }
+        let target = found[0];
+        for &id in &found[1..] {
+            let held = windows.iter().any(|window| window.id == id && window.held);
+            if !held {
+                joins.push((id, target));
+            }
+        }
+        used.extend(found);
+        false
+    });
+    for (at, window) in windows.iter().enumerate() {
+        let Some(category) = window.category.filter(|category| auto.takes(category)) else {
+            continue;
+        };
+        if window.held || joins.iter().any(|(id, _)| *id == window.id) {
+            continue;
+        }
+        let same = |other: &&Candidate| other.id != window.id && other.category == Some(category);
+        let held = { windows.iter() }.find(|other| same(other) && other.held);
+        let earlier = { windows[..at].iter() }
+            .find(|other| same(other) && !joins.iter().any(|(id, _)| *id == other.id));
+        if let Some(target) = held.or(earlier) {
+            joins.push((window.id, target.id));
+        }
+    }
+    joins
+}
+
 /// The layout `choice` names; a file that is not there gives `master`.
 fn layout_of<'a>(library: &'a Library, choice: &LayoutChoice) -> Layout<'a> {
     match choice {
@@ -1629,6 +2068,61 @@ mod tests {
         assert_eq!(Toward::Left.of(stack[0].1, &others), Some('m'));
         assert_eq!(Toward::Up.of(stack[0].1, &others), None);
         assert_eq!(Toward::Right.of(stack[0].1, &others), None);
+    }
+
+    #[test]
+    fn windows_join_stacks_kept_or_of_their_category() {
+        let id = AppWindowId::from_raw;
+        let key = |exe: &str, title: &str| WindowKey {
+            exe: exe.to_owned(),
+            class: "Main".to_owned(),
+            title: title.to_owned(),
+        };
+        let window = |raw, held, category, key: Option<WindowKey>| Candidate {
+            id: id(raw),
+            held,
+            category,
+            key,
+        };
+        // A kept stack is made again once two of its windows are there.
+        let mut kept = vec![vec![key("a.exe", "One"), key("b.exe", "Two")]];
+        let none = AutoStack::default();
+        let alone = [window(1, false, None, Some(key("a.exe", "One")))];
+        assert!(joins_of(&alone, &mut kept, &none).is_empty());
+        assert_eq!(kept.len(), 1);
+        let both = [
+            window(1, true, None, Some(key("a.exe", "One"))),
+            window(2, false, None, Some(key("b.exe", "Other title"))),
+        ];
+        assert_eq!(joins_of(&both, &mut kept, &none), [(id(2), id(1))]);
+        assert!(kept.is_empty());
+        // Windows of a category join the first of it, tiled or not.
+        let browsers = AutoStack::Categories(vec!["browser".to_owned()]);
+        let windows = [
+            window(1, false, Some("editor"), None),
+            window(2, false, Some("browser"), None),
+            window(3, false, Some("browser"), None),
+            window(4, true, Some("editor"), None),
+            window(5, false, Some("editor"), None),
+        ];
+        assert_eq!(
+            joins_of(&windows, &mut Vec::new(), &browsers),
+            [(id(3), id(2))]
+        );
+        let every = AutoStack::All(true);
+        assert_eq!(
+            joins_of(&windows, &mut Vec::new(), &every),
+            [(id(1), id(4)), (id(3), id(2)), (id(5), id(4))]
+        );
+    }
+
+    #[test]
+    fn the_keys_of_stacks_are_commands_of_tiling() {
+        for (press, arg) in DEFAULT_KEYS {
+            assert!(parse_command(&words(arg)).is_ok(), "{press}");
+        }
+        let presses: HashSet<&str> = DEFAULT_KEYS.iter().map(|(press, _)| *press).collect();
+        assert_eq!(presses.len(), DEFAULT_KEYS.len());
     }
 
     #[test]

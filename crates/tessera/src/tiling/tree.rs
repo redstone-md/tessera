@@ -11,8 +11,11 @@
 //! and only split a leaf or take one away. What is said here is pure: it
 //! places rectangles and changes weights, and knows nothing of windows.
 //!
-//! Window stacks, tabbed containers whose windows take turns in one
-//! tile, are to come as another kind of node beside these.
+//! Window stacks are tabbed containers whose windows take turns in one
+//! tile, below a bar of tabs. A layout file makes one with a node of its
+//! own, [`Node::Stack`]; the windows the user stacks are a [`Stack`] that
+//! holds one leaf, so that the layouts made again for another number of
+//! windows keep them.
 
 use crate::platform::ScreenRect;
 
@@ -131,6 +134,9 @@ pub enum Node {
     /// As many windows as it says, each taking all of the room, one over
     /// the other.
     Layered(usize),
+    /// As many windows as it says, taking turns in all of the room below
+    /// a bar of tabs, one of them in front of the others.
+    Stack(usize),
     /// Parts along `axis`, each with its weight: a part takes as much of
     /// the room as its weight is of the weights of all of them.
     Split {
@@ -153,7 +159,7 @@ impl Node {
         match self {
             Self::Leaf => 1,
             Self::Space => 0,
-            Self::Layered(count) => *count,
+            Self::Layered(count) | Self::Stack(count) => *count,
             Self::Split { children, .. } => children.iter().map(|(child, _)| child.count()).sum(),
         }
     }
@@ -163,7 +169,7 @@ impl Node {
     fn alike(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Leaf, Self::Leaf) | (Self::Space, Self::Space) => true,
-            (Self::Layered(_), Self::Layered(_)) => true,
+            (Self::Layered(_), Self::Layered(_)) | (Self::Stack(_), Self::Stack(_)) => true,
             (Self::Split { axis, .. }, Self::Split { axis: other, .. }) => axis == other,
             _ => false,
         }
@@ -179,7 +185,9 @@ impl Node {
             &mut Vec::new(),
             &mut |_, node, room| match node {
                 Self::Leaf => places.push(room),
-                Self::Layered(count) => places.extend(std::iter::repeat_n(room, *count)),
+                Self::Layered(count) | Self::Stack(count) => {
+                    places.extend(std::iter::repeat_n(room, *count));
+                }
                 Self::Space | Self::Split { .. } => {}
             },
         );
@@ -228,7 +236,9 @@ impl Node {
     fn gather(&self, path: &mut Vec<usize>, leaves: &mut Vec<Vec<usize>>) {
         match self {
             Self::Leaf => leaves.push(path.clone()),
-            Self::Layered(count) => leaves.extend(std::iter::repeat_n(path.clone(), *count)),
+            Self::Layered(count) | Self::Stack(count) => {
+                leaves.extend(std::iter::repeat_n(path.clone(), *count));
+            }
             Self::Space => {}
             Self::Split { children, .. } => {
                 for (index, (child, _)) in children.iter().enumerate() {
@@ -414,6 +424,7 @@ impl Node {
         let Some((&first, rest)) = path.split_first() else {
             return match self {
                 Self::Layered(count) if count > 1 => Some(Self::Layered(count - 1)),
+                Self::Stack(count) if count > 1 => Some(Self::Stack(count - 1)),
                 _ => None,
             };
         };
@@ -438,8 +449,35 @@ impl Node {
         }
     }
 
+    /// For each leaf, in the order of the leaves, which [`Node::Stack`] it
+    /// is a window of, counting them in the order of the leaves; `None`
+    /// for a leaf of no stack.
+    pub fn stacks(&self) -> Vec<Option<usize>> {
+        let mut stacks = Vec::with_capacity(self.count());
+        self.mark_stacks(&mut 0, &mut stacks);
+        stacks
+    }
+
+    fn mark_stacks(&self, next: &mut usize, stacks: &mut Vec<Option<usize>>) {
+        match self {
+            Self::Leaf => stacks.push(None),
+            Self::Layered(count) => stacks.extend(std::iter::repeat_n(None, *count)),
+            Self::Stack(count) => {
+                stacks.extend(std::iter::repeat_n(Some(*next), *count));
+                *next += 1;
+            }
+            Self::Space => {}
+            Self::Split { children, .. } => {
+                for (child, _) in children {
+                    child.mark_stacks(next, stacks);
+                }
+            }
+        }
+    }
+
     /// The tree written as text, as `tiling-state.toml` keeps it: `l` for
-    /// a leaf, `s` for space, `m3` for three layered windows and
+    /// a leaf, `s` for space, `m3` for three layered windows, `k3` for a
+    /// stack of three and
     /// `h(1:l,2:v(1:l,1:l))` for rooms divided across (`h`) or down (`v`),
     /// each part after its weight.
     pub fn to_text(&self) -> String {
@@ -447,6 +485,7 @@ impl Node {
             Self::Leaf => "l".to_owned(),
             Self::Space => "s".to_owned(),
             Self::Layered(count) => format!("m{count}"),
+            Self::Stack(count) => format!("k{count}"),
             Self::Split { axis, children } => {
                 let letter = match axis {
                     Axis::Horizontal => 'h',
@@ -473,6 +512,108 @@ impl Node {
             return Err(format!("`{text}` goes on after its tree"));
         }
         Ok(node)
+    }
+}
+
+/// Windows that take turns in one tile, below a bar of tabs: the order
+/// of the tabs, and which of them is in front. What is said here is pure:
+/// `T` names a window, and nothing is moved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stack<T> {
+    windows: Vec<T>,
+    active: usize,
+}
+
+impl<T: Copy + PartialEq> Stack<T> {
+    /// A stack of `windows` in this order, the one at `active` in front
+    /// (the last one where there is no such place). `None` for fewer
+    /// than two windows, which make no stack.
+    pub fn new(windows: Vec<T>, active: usize) -> Option<Self> {
+        (windows.len() >= 2).then(|| Self {
+            active: active.min(windows.len() - 1),
+            windows,
+        })
+    }
+
+    /// The windows, in the order of their tabs.
+    pub fn windows(&self) -> &[T] {
+        &self.windows
+    }
+
+    /// The window in front.
+    pub fn active(&self) -> T {
+        self.windows[self.active]
+    }
+
+    pub fn contains(&self, window: T) -> bool {
+        self.windows.contains(&window)
+    }
+
+    /// Adds `window` after the last tab, in front with `front`. A window
+    /// that is there already stays where it is.
+    pub fn join(&mut self, window: T, front: bool) {
+        let at = match self.windows.iter().position(|&listed| listed == window) {
+            Some(at) => at,
+            None => {
+                self.windows.push(window);
+                self.windows.len() - 1
+            }
+        };
+        if front {
+            self.active = at;
+        }
+    }
+
+    /// Takes `window` out. The window in front stays in front; where it is
+    /// the one taken out, the tab after it comes in front, or the one
+    /// before it at the end. Whether the window was there is returned. A
+    /// stack left with one window is no stack any more: see
+    /// [`Self::lone`].
+    pub fn remove(&mut self, window: T) -> bool {
+        let Some(at) = self.windows.iter().position(|&listed| listed == window) else {
+            return false;
+        };
+        self.windows.remove(at);
+        if at < self.active || (at == self.active && self.active == self.windows.len()) {
+            self.active = self.active.saturating_sub(1);
+        }
+        true
+    }
+
+    /// The only window left, once all but one were taken out.
+    pub fn lone(&self) -> Option<T> {
+        match self.windows[..] {
+            [only] => Some(only),
+            _ => None,
+        }
+    }
+
+    /// Whether no window is left.
+    pub fn is_empty(&self) -> bool {
+        self.windows.is_empty()
+    }
+
+    /// Brings the tab after the one in front in front, or the one before
+    /// it with `back`, going round past the ends; the window in front now
+    /// is returned.
+    pub fn cycle(&mut self, back: bool) -> T {
+        let count = self.windows.len();
+        self.active = match back {
+            true => (self.active + count - 1) % count,
+            false => (self.active + 1) % count,
+        };
+        self.active()
+    }
+
+    /// Brings `window` in front; whether that changed anything.
+    pub fn activate(&mut self, window: T) -> bool {
+        match self.windows.iter().position(|&listed| listed == window) {
+            Some(at) if at != self.active => {
+                self.active = at;
+                true
+            }
+            _ => false,
+        }
     }
 }
 
@@ -504,7 +645,7 @@ impl Reader<'_> {
         let node = match letter {
             Some(b'l') => Node::Leaf,
             Some(b's') => Node::Space,
-            Some(b'm') => {
+            Some(letter @ (b'm' | b'k')) => {
                 let count = self.digits()?;
                 if count == 0 {
                     return Err("layered windows are at least one".to_owned());
@@ -513,7 +654,10 @@ impl Reader<'_> {
                     return Err("the tree has too many leaves".to_owned());
                 }
                 self.leaves = self.leaves.saturating_add(count);
-                Node::Layered(count)
+                match letter {
+                    b'm' => Node::Layered(count),
+                    _ => Node::Stack(count),
+                }
             }
             Some(letter @ (b'h' | b'v')) => {
                 let axis = match letter {
@@ -928,5 +1072,64 @@ mod tests {
                 assert!(pair[0].right > pair[0].left);
             }
         }
+    }
+
+    #[test]
+    fn a_stack_keeps_the_window_in_front_when_another_goes() {
+        assert_eq!(Stack::new(vec![1], 0), None);
+        let mut stack = Stack::new(vec![1, 2, 3, 4], 2).unwrap();
+        assert_eq!(stack.active(), 3);
+        // A tab before the one in front goes: the same window stays in front.
+        assert!(stack.remove(1));
+        assert_eq!((stack.windows(), stack.active()), (&[2, 3, 4][..], 3));
+        // A tab after it goes.
+        assert!(stack.remove(4));
+        assert_eq!(stack.active(), 3);
+        assert!(!stack.remove(9));
+        // The window in front goes: the one before it at the end.
+        assert!(stack.remove(3));
+        assert_eq!(stack.lone(), Some(2));
+        let mut stack = Stack::new(vec![1, 2, 3], 0).unwrap();
+        // The window in front goes: the tab after it comes in front.
+        stack.remove(1);
+        assert_eq!(stack.active(), 2);
+        stack.remove(2);
+        stack.remove(3);
+        assert!(stack.is_empty());
+    }
+
+    #[test]
+    fn a_stack_goes_round_and_takes_windows_in() {
+        let mut stack = Stack::new(vec!['a', 'b', 'c'], 0).unwrap();
+        assert_eq!(stack.cycle(false), 'b');
+        assert_eq!(stack.cycle(false), 'c');
+        assert_eq!(stack.cycle(false), 'a');
+        assert_eq!(stack.cycle(true), 'c');
+        assert!(stack.activate('a'));
+        assert!(!stack.activate('a'));
+        assert!(!stack.activate('z'));
+        stack.join('d', true);
+        assert_eq!(stack.active(), 'd');
+        stack.join('b', false);
+        assert_eq!(stack.windows(), ['a', 'b', 'c', 'd']);
+        assert_eq!(stack.active(), 'd');
+        assert!(stack.contains('d') && !stack.contains('e'));
+    }
+
+    #[test]
+    fn the_windows_of_a_stack_of_a_layout_share_its_room() {
+        let tree = Node::Split {
+            axis: Axis::Horizontal,
+            children: vec![(Node::Leaf, 1.), (Node::Stack(2), 1.), (Node::Stack(1), 1.)],
+        };
+        assert_eq!(tree.count(), 4);
+        let places = tree.place(rect(0, 0, 900, 600), 0);
+        assert_eq!(places[1], places[2]);
+        assert_eq!(tree.stacks(), [None, Some(0), Some(0), Some(1)]);
+        assert_eq!(tree.to_text(), "h(1:l,1:k2,1:k1)");
+        assert_eq!(Node::from_text("h(1:l,1:k2,1:k1)"), Ok(tree.clone()));
+        let fewer = tree.without(1).unwrap();
+        assert_eq!(fewer.stacks(), [None, Some(0), Some(1)]);
+        assert!(Node::from_text("k0").is_err());
     }
 }

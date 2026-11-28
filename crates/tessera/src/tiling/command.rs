@@ -17,6 +17,8 @@ pub enum Reserve {
     Split(Axis),
     /// Out of the tiles.
     Float,
+    /// Into the stack of the window in front, as its tab in front.
+    Stack,
 }
 
 /// What is asked of the tiling.
@@ -43,14 +45,23 @@ pub enum TilingCommand {
     Reset,
     /// Where the next window opens.
     Reserve(Reserve),
+    /// The window in front into the stack of the tile on that side of it,
+    /// or into a stack with that window.
+    Stack(Toward),
+    /// The window in front out of its stack, into a tile of its own.
+    Unstack,
+    /// The next window of the stack of the window in front in front, or
+    /// the one before with `true`.
+    CycleStack(bool),
 }
 
 /// What `words` ask of the tiling, or why they ask nothing: `next`,
 /// `off`, `float`, `wider`, `narrower`, `reset`, a layout of Tessera or the
 /// name of a layout file (whether there is one is asked when it is
-/// chosen), `reserve` with a side or `float`, `split` with
-/// `horizontal` or `vertical`, or `width` or `height` with `more` or
-/// `less`.
+/// chosen), `reserve` with a side, `float` or `stack`, `split` with
+/// `horizontal` or `vertical`, `width` or `height` with `more` or
+/// `less`, `stack` with a side, `unstack`, or `cycle-stack` with `next`
+/// or `prev`.
 pub fn parse_command(words: &[&str]) -> Result<TilingCommand, String> {
     let more = |word: &str, what: &str| match word {
         "more" => Ok(true),
@@ -71,12 +82,25 @@ pub fn parse_command(words: &[&str]) -> Result<TilingCommand, String> {
         ["width", word] => more(word, "width").map(TilingCommand::Width),
         ["height", word] => more(word, "height").map(TilingCommand::Height),
         ["reserve", "float"] => Ok(TilingCommand::Reserve(Reserve::Float)),
+        ["reserve", "stack"] => Ok(TilingCommand::Reserve(Reserve::Stack)),
         ["reserve", side] => match Toward::parse(side) {
             Some(side) => Ok(TilingCommand::Reserve(Reserve::Side(side))),
             None => Err(format!(
-                "`reserve` is followed by `left`, `right`, `up`, `down` or `float`, not `{side}`"
+                "`reserve` is followed by `left`, `right`, `up`, `down`, `float` or `stack`, not `{side}`"
             )),
         },
+        ["stack", side] => match Toward::parse(side) {
+            Some(side) => Ok(TilingCommand::Stack(side)),
+            None => Err(format!(
+                "`stack` is followed by `left`, `right`, `up` or `down`, not `{side}`"
+            )),
+        },
+        ["unstack"] => Ok(TilingCommand::Unstack),
+        ["cycle-stack", "next"] => Ok(TilingCommand::CycleStack(false)),
+        ["cycle-stack", "prev"] => Ok(TilingCommand::CycleStack(true)),
+        ["cycle-stack", other] => Err(format!(
+            "`cycle-stack` is followed by `next` or `prev`, not `{other}`"
+        )),
         ["split", "horizontal"] => Ok(TilingCommand::Reserve(Reserve::Split(Axis::Horizontal))),
         ["split", "vertical"] => Ok(TilingCommand::Reserve(Reserve::Split(Axis::Vertical))),
         ["split", other] => Err(format!(
@@ -88,7 +112,7 @@ pub fn parse_command(words: &[&str]) -> Result<TilingCommand, String> {
                 Ok(TilingCommand::Layout(LayoutChoice::File(name.to_owned())))
             }
             None => Err(format!(
-                "`tiling` is `next`, `off`, `float`, `wider`, `narrower`, `reset`, `reserve` with a side, `split` with a direction, `width` or `height` with `more` or `less`, or a layout, not `{name}`"
+                "`tiling` is `next`, `off`, `float`, `wider`, `narrower`, `reset`, `unstack`, `reserve` with a side, `split` with a direction, `width` or `height` with `more` or `less`, `stack` with a side, `cycle-stack` with `next` or `prev`, or a layout, not `{name}`"
             )),
         },
         [] => Err("`tiling` says what to do".to_owned()),
@@ -167,6 +191,34 @@ mod tests {
             "width wide",
             "next please",
             "grid now",
+        ] {
+            assert!(parse(wrong).is_err(), "{wrong}");
+        }
+    }
+
+    #[test]
+    fn stacks_are_asked_for() {
+        assert_eq!(parse("stack left"), Ok(TilingCommand::Stack(Toward::Left)));
+        assert_eq!(parse("Stack DOWN"), Ok(TilingCommand::Stack(Toward::Down)));
+        assert_eq!(parse("unstack"), Ok(TilingCommand::Unstack));
+        assert_eq!(
+            parse("cycle-stack next"),
+            Ok(TilingCommand::CycleStack(false))
+        );
+        assert_eq!(
+            parse("cycle-stack prev"),
+            Ok(TilingCommand::CycleStack(true))
+        );
+        assert_eq!(
+            parse("reserve stack"),
+            Ok(TilingCommand::Reserve(Reserve::Stack))
+        );
+        for wrong in [
+            "stack",
+            "stack back",
+            "unstack all",
+            "cycle-stack",
+            "cycle-stack sideways",
         ] {
             assert!(parse(wrong).is_err(), "{wrong}");
         }

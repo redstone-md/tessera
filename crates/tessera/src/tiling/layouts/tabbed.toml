@@ -1,0 +1,32 @@
+# A tiling layout that comes with Tessera: the first window on the left,
+# the second on the top right, and every window after those in a stack
+# below it, taking turns under a bar of tabs. Copy it to
+# %APPDATA%\tessera\tiling-layouts\ under another name to make your own,
+# and choose it with layout = "<file name>" under [tiling].
+name = "Tall with tabs"
+
+[structure]
+kind = "horizontal"
+
+# The first window. A leaf holds one window, and grow is what a part
+# weighs against the others of its container.
+[[structure.children]]
+kind = "leaf"
+grow = 1.5
+priority = 1
+
+[[structure.children]]
+kind = "vertical"
+
+# The second window.
+[[structure.children.children]]
+kind = "leaf"
+priority = 2
+
+# Every other window. A stack holds as many windows as its max, or all
+# that are left without one, in one tile below a bar of tabs; it is there
+# from the third window on.
+[[structure.children.children]]
+kind = "stack"
+priority = 3
+grow = 2

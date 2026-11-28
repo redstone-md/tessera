@@ -1,3 +1,211 @@
 # Rows of the settings filled by tiling-stacks. Format: modules/settings/rows.rs
 # (RowCard, and [[action]] titles). Plain labels are English texts of the
 # RUSSIAN table in i18n.rs.
+
+# The keys of [tiling] that the rows of core.toml leave out (enabled, layout,
+# gap and border are there), in the same card.
+
+[[card]]
+section = "Windows"
+title = "Tiling"
+table = "tiling"
+
+[[card.row]]
+key = "padding"
+kind = "sides"
+label = "Room around the tiles"
+description = "The gap where nothing is given."
+min = 0
+max = 1000
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "margin"
+kind = "sides"
+label = "Room at the sides of the display"
+min = 0
+max = 1000
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "only"
+kind = "list"
+label = "Only these programs are tiled"
+placeholder = { en = "editor.exe" }
+
+[[card.row]]
+key = "except"
+kind = "list"
+label = "Programs left floating"
+placeholder = { en = "editor.exe" }
+
+[[card.row]]
+key = "except_titles"
+kind = "list"
+label = "Titles left floating"
+description = "A window whose title has one of them in it, whatever the case."
+
+[[card.row]]
+key = "except_classes"
+kind = "list"
+label = "Window classes left floating"
+description = "A window whose class has one of them in it, whatever the case."
+
+[[card.row]]
+key = "float.width"
+kind = "slider"
+label = "Width of a floated window"
+description = "A share of the room the bars leave; without one, the window goes back where it was."
+min = 0.1
+max = 1
+step = 0.05
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "float.height"
+kind = "slider"
+label = "Height of a floated window"
+min = 0.1
+max = 1
+step = 0.05
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "drag"
+kind = "choice"
+label = "A tile dropped on another"
+choices = [
+    { value = "unset", label = "Trades places with it" },
+    { value = "sort", label = "Takes its place in the order" },
+]
+
+[[card.row]]
+key = "resize_step"
+kind = "number"
+label = "Resize step"
+min = 0.01
+max = 0.5
+step = 0.01
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "stack_bar"
+kind = "choice"
+label = "Bar of tabs over a stack"
+choices = [
+    { value = "unset", label = "With two windows or more" },
+    { value = "always", label = "Always" },
+    { value = "never", label = "Never" },
+]
+
+[[card.row]]
+key = "stack_bar_height"
+kind = "number"
+label = "Height of the bar of tabs"
+min = 16
+max = 96
+step = 4
+unit = "px"
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "auto_stack"
+kind = "list"
+label = "Stack new windows of these categories"
+description = "Categories the window rules give; * is every category."
+placeholder = { en = "browser" }
+
+# What is other on some displays and workspaces: [[tiling.display]] and
+# [[tiling.workspace]], edited on a page of their own.
+
+[[card]]
+section = "Windows"
+title = "Tiling of displays and workspaces"
+page = "tiling-overrides"
+search = ["Tiling", "Layout", "Gap"]
+
+# The keys of [workspaces] that the rows of core.toml leave out (own and keys
+# are there), in the same card.
+
+[[card]]
+section = "Workspaces"
+title = "Workspaces"
+table = "workspaces"
+
+[[card.row]]
+key = "per_display"
+kind = "toggle"
+label = "Each display has workspaces of its own"
+default = false
+
+[[card.row]]
+key = "only"
+kind = "list"
+label = "Only these programs belong to a workspace"
+placeholder = { en = "editor.exe" }
+
+[[card.row]]
+key = "except"
+kind = "list"
+label = "Programs on every workspace"
+placeholder = { en = "player.exe" }
+
+[[card.row]]
+key = "names"
+kind = "list"
+label = "Names of the workspaces"
+description = "The first for the first workspace; an empty one leaves its number."
+
+[[card.row]]
+key = "icons"
+kind = "list"
+label = "Icons of the workspaces"
+description = "A character of the icon font for each workspace, the first for the first."
+
+[[card.row]]
+key = "min"
+kind = "number"
+label = "Fewest workspaces"
+min = 1
+max = 16
+step = 1
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "max"
+kind = "number"
+label = "Most workspaces"
+min = 1
+max = 16
+step = 1
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "rows"
+kind = "number"
+label = "Rows of workspaces"
+min = 1
+max = 16
+step = 1
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "wrap"
+kind = "toggle"
+label = "A step past the last workspace comes to the first"
+default = false
+
+[[card.row]]
+key = "add_button"
+kind = "toggle"
+label = "Button that makes a workspace"
+default = false

@@ -771,6 +771,51 @@ unsafe extern "system" fn came_in_front(
     }
 }
 
+// tiling-stacks: the windows of a stack lie one just behind the other, and
+// the bar of tabs of a stack just above the window in front of it.
+impl AppWindowId {
+    /// Places the window at `frame`, as [`Self::place`] does, and just
+    /// behind the window `above` in the order of windows, without
+    /// bringing anything in front. Whether Windows took the request is
+    /// returned.
+    pub fn place_behind(self, above: AppWindowId, frame: ScreenRect) -> bool {
+        if self == above || !self.place(frame) {
+            return false;
+        }
+        let flags = quietly(SWP_NOMOVE | SWP_NOSIZE);
+        // SAFETY: the request is posted to the window's thread and fails
+        // without side effects for a window, or one to go behind, that is
+        // gone.
+        unsafe { SetWindowPos(self.hwnd(), Some(above.hwnd()), 0, 0, 0, 0, flags) }.is_ok()
+    }
+
+    /// The window just above this one in the order of windows, if any.
+    pub fn above(self) -> Option<AppWindowId> {
+        use windows::Win32::UI::WindowsAndMessaging::{GW_HWNDPREV, GetWindow};
+        // SAFETY: the call only reads the order of windows and tolerates a
+        // handle whose window has since been destroyed.
+        let above = unsafe { GetWindow(self.hwnd(), GW_HWNDPREV) }.ok()?;
+        (!above.is_invalid()).then(|| AppWindowId::from_raw(above.0 as isize))
+    }
+
+    /// Puts the window just above the window `below` in the order of
+    /// windows, as the bar of tabs of a stack lies above the window in
+    /// front of it: behind the window above that one, or at the top of
+    /// the windows not kept above the others where there is none such. It
+    /// is neither moved nor brought in front. Whether Windows took the
+    /// request is returned.
+    pub fn lift_above(self, below: AppWindowId) -> bool {
+        let after = match below.above() {
+            Some(above) if above == self => return true,
+            Some(above) if !above.is_topmost() => above.hwnd(),
+            _ => HWND_TOP,
+        };
+        let flags = quietly(SWP_NOMOVE | SWP_NOSIZE);
+        // SAFETY: as in `place_behind`.
+        unsafe { SetWindowPos(self.hwnd(), Some(after), 0, 0, 0, 0, flags) }.is_ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
