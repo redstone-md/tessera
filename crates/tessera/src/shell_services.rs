@@ -25,8 +25,10 @@ use std::time::Duration;
 use gpui::{App, Global};
 use serde::Deserialize;
 
-use crate::files::Files;
-use crate::platform::{Launch, ProgmanDde, ShellHost, ShellServiceObjects, shell_mode};
+use crate::files::{Files, WindowsChange};
+use crate::platform::{
+    Launch, ProgmanDde, ShellHost, ShellServiceObjects, ShellWindows, shell_mode,
+};
 
 /// What `[shell_services]` of the configuration says.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -87,6 +89,7 @@ pub fn start(config: &ShellServicesConfig, cx: &mut App) {
         ProgmanDde::start();
     }
     show_program_groups(cx);
+    follow_files_windows(cx);
     // Quitting closes the objects away from the thread of GPUI, which
     // waits for that at most as long as it waits for any part.
     cx.on_app_quit(|cx| {
@@ -141,6 +144,39 @@ fn show_program_groups(cx: &mut App) {
                 }
             });
             if shown.is_err() {
+                break;
+            }
+        }
+    })
+    .detach();
+}
+
+/// Tells the list of folder windows of the Shell the parsing name of the
+/// place each window of the file manager shows, and sends a window where
+/// a program asked it to go (`Navigate`, `Navigate2`, `Refresh`); a place
+/// the window cannot show, and one asked of the desktop, opens in a new
+/// window. Nothing here waits for the list.
+fn follow_files_windows(cx: &mut App) {
+    for window in Files::windows(cx) {
+        ShellWindows::named(window.hwnd, window.parsing.clone());
+    }
+    Files::observe_windows(cx, |change, _| match change {
+        WindowsChange::Opened(window) | WindowsChange::Navigated(window) => {
+            ShellWindows::named(window.hwnd, window.parsing.clone());
+        }
+        WindowsChange::Closed(_) => {}
+    });
+    let navigations = ShellWindows::navigations();
+    cx.spawn(async move |cx| {
+        while let Ok(navigation) = navigations.recv().await {
+            let went = cx.update(|cx| {
+                let moved = !navigation.new_window
+                    && Files::navigate(navigation.window, &navigation.parsing, cx);
+                if !moved {
+                    Files::open_named(&navigation.parsing, cx);
+                }
+            });
+            if went.is_err() {
                 break;
             }
         }

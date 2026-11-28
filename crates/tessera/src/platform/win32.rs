@@ -20,6 +20,7 @@ mod clipboard_watch;
 mod commands;
 mod connections;
 mod desktop_folder;
+mod desktop_view;
 mod desktops;
 mod devices;
 mod display_config;
@@ -142,6 +143,7 @@ pub use desktop_folder::{
     DesktopFolders, DesktopLayer, ExplorerIcons, FolderWatch, LayerKind, VirtualKind, layer_frame,
     virtual_items,
 };
+pub use desktop_view::{DesktopLayout, DesktopView, Placement};
 pub use desktops::VirtualDesktops;
 pub use desktops::{DesktopSurvey, DesktopWindow};
 pub use devices::{

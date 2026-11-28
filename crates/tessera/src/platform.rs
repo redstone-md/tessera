@@ -74,6 +74,11 @@ pub use win32::{
     DesktopFolders, DesktopLayer, ExplorerIcons, FolderWatch, LayerKind, VirtualKind, layer_frame,
     virtual_items,
 };
+#[allow(
+    unused_imports,
+    reason = "fed from DesktopIcons once desktop-fidelity is merged"
+)]
+pub use win32::{DesktopLayout, DesktopView, Placement};
 pub use win32::{DesktopSurvey, WindowMark};
 #[allow(
     unused_imports,
