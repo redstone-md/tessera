@@ -181,6 +181,7 @@ impl Shell {
         crate::taskview::TaskView::start(cx);
         Files::configure(&config.files, cx);
         config.file_view.configure(cx);
+        crate::shell_services::start(&config.shell_services);
         Startup::start(&config.startup, cx);
         Snapper::start(&config.snap, config.windows_keys, &config.keys, cx);
         Rules::use_templates(&config.rule_templates, cx);
@@ -456,6 +457,7 @@ impl Shell {
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
         config.file_view.configure(cx);
+        crate::shell_services::configure(&config.shell_services);
         Startup::configure(&config.startup, cx);
         Snapper::configure(&config.snap, config.windows_keys, &config.keys, cx);
         Rules::use_templates(&config.rule_templates, cx);

@@ -110,6 +110,10 @@ use windows::core::{BOOL, HSTRING, PCSTR, PCWSTR, s, w};
 
 use super::{AppCommand, AppWindowId, Launch, ScreenRect, SystemWallpaper, Taskbar};
 
+mod recorder;
+
+use recorder::Surface;
+
 /// The codes of the shell hook, as `wParam` of the `SHELLHOOK` message.
 const HSHELL_WINDOWCREATED: u32 = 1;
 const HSHELL_WINDOWDESTROYED: u32 = 2;
@@ -163,6 +167,11 @@ const DESKTOP_TIME: Duration = Duration::from_secs(2);
 /// user of programs that keep the session longer than about five
 /// seconds.
 const ENDING_TIME: Duration = Duration::from_secs(4);
+
+/// How long the end of the session waits for what lives on threads of
+/// its own to close, such as the objects of `ShellServiceObjects`; it is
+/// part of the time the end of the session takes, before Tessera's own.
+const CLOSING_TIME: Duration = Duration::from_millis(1500);
 
 /// The events a shell signals once it is ready; programs and Windows
 /// wait for one of them. Each that does not exist is left out.
@@ -244,6 +253,10 @@ pub struct HostOptions {
     pub media_keys: bool,
 }
 
+/// What starts closing a service at the end of the session; see
+/// [`ShellHost::close_at_session_end`].
+type Closer = fn() -> Option<HANDLE>;
+
 /// A piece of work for the host thread.
 type Work = Box<dyn FnOnce() + Send>;
 
@@ -269,6 +282,9 @@ static RESTORED: AtomicIsize = AtomicIsize::new(0);
 /// What the host thread restores by itself when the session ends; see
 /// [`ShellHost::on_session_end`].
 static SESSION_END: OnceLock<fn()> = OnceLock::new();
+/// What the host thread starts closing when the session ends; see
+/// [`ShellHost::close_at_session_end`].
+static CLOSERS: Mutex<Vec<Closer>> = Mutex::new(Vec::new());
 static SUBSCRIBERS: Mutex<Vec<Sender<ShellEvent>>> = Mutex::new(Vec::new());
 static WORK: Mutex<Vec<Work>> = Mutex::new(Vec::new());
 static HANDLERS: Mutex<Vec<(u64, Handler)>> = Mutex::new(Vec::new());
@@ -448,6 +464,23 @@ impl ShellHost {
     /// GPUI nor wait. Only the first call counts.
     pub fn on_session_end(restore: fn()) {
         let _ = SESSION_END.set(restore);
+    }
+
+    /// Records the messages the windows of the shell leave unanswered in
+    /// `%LOCALAPPDATA%\tessera\shell-messages.log`, or stops; only the
+    /// shell of the session records. It records from its start until
+    /// told otherwise.
+    pub fn record_messages(on: bool) {
+        recorder::set_recording(on);
+    }
+
+    /// Has the host thread call `close` when the session ends, after what
+    /// [`Self::on_session_end`] restores: it starts closing something that
+    /// lives on a thread of its own and gives the event that thread sets
+    /// once it is done, which the end of the session waits for, together
+    /// with the others, at most [`CLOSING_TIME`]. It must not wait itself.
+    pub(super) fn close_at_session_end(close: Closer) {
+        locked(&CLOSERS).push(close);
     }
 
     /// Whether the session ends.
@@ -879,6 +912,7 @@ fn session_message(message: u32, w: WPARAM) -> Option<LRESULT> {
                 {
                     report!("what Tessera hid was not all shown at the end of the session");
                 }
+                close_services();
                 wait_for_restoring();
             }
             Some(LRESULT(0))
@@ -887,35 +921,59 @@ fn session_message(message: u32, w: WPARAM) -> Option<LRESULT> {
     }
 }
 
+/// Starts closing what [`ShellHost::close_at_session_end`] named and
+/// waits until each is closed, at most [`CLOSING_TIME`] for all.
+fn close_services() {
+    let closers = locked(&CLOSERS).clone();
+    let events: Vec<HANDLE> = { closers.into_iter() }
+        .filter_map(|close| catch_unwind(close).ok().flatten())
+        .collect();
+    if !wait_handling_sent(&events, CLOSING_TIME, true) {
+        report!("a service of the shell did not close in time at the end of the session");
+    }
+}
+
 /// Waits until Tessera has restored what it changed, at most
-/// [`ENDING_TIME`], handling the messages other threads send meanwhile:
-/// a backdrop that goes, made on the thread of GPUI, sends one to the
-/// desktop window.
+/// [`ENDING_TIME`].
 fn wait_for_restoring() {
     let event = RESTORED.load(Ordering::SeqCst);
     if event == 0 {
         return;
     }
-    let events = [HANDLE(event as *mut c_void)];
-    let until = Instant::now() + ENDING_TIME;
-    loop {
+    wait_handling_sent(&[HANDLE(event as *mut c_void)], ENDING_TIME, false);
+}
+
+/// Waits until `events` are set, every one where `all` and any one
+/// otherwise, at most `time`, handling the messages other threads send
+/// meanwhile: a backdrop that goes, made on the thread of GPUI, sends one
+/// to the desktop window. Says whether they were set in time.
+fn wait_handling_sent(events: &[HANDLE], time: Duration, all: bool) -> bool {
+    let mut waiting = events.to_vec();
+    let until = Instant::now() + time;
+    while !waiting.is_empty() {
         let left = until.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            break;
+            return false;
         }
-        // SAFETY: the event is kept for the life of the process, and
-        // `message` outlives the call that dispatches what was sent.
+        let count = waiting.len() as u32;
+        // SAFETY: the events are kept until they are set, and `message`
+        // outlives the call that dispatches what was sent.
         unsafe {
             let woken = MsgWaitForMultipleObjectsEx(
-                Some(&events),
+                Some(&waiting),
                 left.as_millis() as u32,
                 QS_SENDMESSAGE,
                 MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS(0),
             );
-            if woken == WAIT_OBJECT_0 {
-                break;
+            if (WAIT_OBJECT_0.0..WAIT_OBJECT_0.0 + count).contains(&woken.0) {
+                if !all {
+                    return true;
+                }
+                // The one set is waited for no longer.
+                waiting.remove((woken.0 - WAIT_OBJECT_0.0) as usize);
+                continue;
             }
-            if woken.0 == WAIT_OBJECT_0.0 + 1 {
+            if woken.0 == WAIT_OBJECT_0.0 + count {
                 let mut message = MSG::default();
                 let _ = PeekMessageW(
                     &raw mut message,
@@ -926,18 +984,20 @@ fn wait_for_restoring() {
                 );
                 continue;
             }
-            break;
+            return false;
         }
     }
+    true
 }
 
 /// Runs `respond` for a window procedure, reporting a panic instead of
 /// letting it unwind into Windows, and gives the default handling for
-/// `None`.
+/// `None`, which the recorder of `surface` counts.
 ///
 /// # Safety
 /// The arguments must be those Windows passed to the window procedure.
 unsafe fn answer(
+    surface: Surface,
     window: HWND,
     message: u32,
     w: WPARAM,
@@ -946,7 +1006,7 @@ unsafe fn answer(
 ) -> LRESULT {
     match catch_unwind(AssertUnwindSafe(respond)) {
         Ok(Some(answer)) => return answer,
-        Ok(None) => {}
+        Ok(None) => recorder::note(surface, window, message, w.0, l.0),
         Err(_) => report!("a message to the shell was not handled"),
     }
     // SAFETY: the arguments are passed on as they came.
@@ -1018,7 +1078,7 @@ unsafe extern "system" fn respond_desktop(
         _ => session_message(message, w),
     };
     // SAFETY: the arguments are those Windows passed.
-    unsafe { answer(window, message, w, l, respond) }
+    unsafe { answer(Surface::Desktop, window, message, w, l, respond) }
 }
 
 /// The window procedure of `WorkerW`, which draws the wallpaper.
@@ -1041,7 +1101,7 @@ unsafe extern "system" fn respond_wallpaper(
         _ => None,
     };
     // SAFETY: the arguments are those Windows passed.
-    unsafe { answer(window, message, w, l, respond) }
+    unsafe { answer(Surface::Wallpaper, window, message, w, l, respond) }
 }
 
 /// The window procedure of `SHELLDLL_DefView`, which draws nothing, so
@@ -1066,7 +1126,7 @@ unsafe extern "system" fn respond_icons(
         _ => None,
     };
     // SAFETY: the arguments are those Windows passed.
-    unsafe { answer(window, message, w, l, respond) }
+    unsafe { answer(Surface::Icons, window, message, w, l, respond) }
 }
 
 /// The window procedure of the hidden window of the shell hook.
@@ -1134,7 +1194,7 @@ unsafe extern "system" fn respond_hook(
         }
     };
     // SAFETY: the arguments are those Windows passed.
-    unsafe { answer(window, message, w, l, respond) }
+    unsafe { answer(Surface::TaskManager, window, message, w, l, respond) }
 }
 
 /// Tells of a request for the Start menu. Windows may tell one press both
