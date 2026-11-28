@@ -175,6 +175,9 @@
 #                      "/select,C:\x\a.txt" or "shell:Downloads"
 #             files-default  arg "on" has other programs open folders and
 #                      drives in Tessera Files, "off" gives that back
+#             terminal-dropdown  slides the drop-down terminal down from the
+#                      top of the display under the pointer, or up again;
+#                      it brings no key
 #             share    the share window of Windows for the files arg names,
 #                      separated by "|"
 #             map-drive, disconnect-drive  the dialogs of Windows that map
@@ -363,6 +366,9 @@
 #   autoplay       when AutoPlay is done for drives that arrive: "shell"
 #                  (default; only as the shell, as Explorer does it
 #                  otherwise), "always" or "off"
+#   restore_windows  whether the windows open when Tessera ended open again
+#                  at its next start, each where it was with its tabs; kept
+#                  in %APPDATA%\tessera\files-windows.toml (false)
 # `tessera files install` has other programs open folders and drives here
 # (`tessera files revert` undoes it, `tessera files status` shows it; see
 # docs/SHELL.md); `tessera files` also takes Explorer's command lines, as
@@ -375,6 +381,7 @@
 # restore = false
 # explorer = true
 # autoplay = "shell"
+# restore_windows = false
 
 # [file_view] says how the file manager pictures files and what it shows
 # beside its panes.
@@ -402,6 +409,46 @@
 # details = false
 # preview_handlers = true
 # preview_timeout = 5.0
+
+# [terminal] sets Tessera's terminal: the one under the panes of the file
+# manager (F4), the widget `terminal` and the drop-down terminal of the
+# action `terminal-dropdown`, which brings no key (see the [[key]] below).
+#   shell            "pwsh", "powershell", "cmd", "wsl", "wsl:<distribution>"
+#                    or a command line; PowerShell 7 where it is installed,
+#                    else Windows PowerShell, while it is not set
+#   font             the family of the font; Consolas, then Courier New,
+#                    where it is not installed ("Cascadia Mono")
+#   font_size        in pixels, from 6 to 48 (13)
+#   line_height      a share of the size of the font, from 0.8 to 3 (1.25)
+#   scrollback       the lines kept that scrolled out of sight (10000)
+#   palette          up to 16 colors, "#rrggbb", from black to bright white;
+#                    the theme gives those not set ([])
+#   cursor           "block" (default), "underline" or "beam", or with
+#                    "-steady" after it to keep it from blinking
+#   copy_on_select   whether what is selected goes to the clipboard (false)
+#   pane_follows     whether the pane of the file manager goes where the
+#                    shell of the terminal under it says it went (true)
+#   dropdown_width   the share of the width of the display the drop-down
+#                    terminal takes (1.0)
+#   dropdown_height  the share of its height (0.5)
+#   dropdown_hides   whether it hides when another window takes the keys
+#                    (true)
+# [terminal]
+# shell = "pwsh"
+# font = "Cascadia Mono"
+# font_size = 13
+# line_height = 1.25
+# scrollback = 10000
+# cursor = "block"
+# copy_on_select = false
+# pane_follows = true
+# dropdown_width = 1.0
+# dropdown_height = 0.5
+# dropdown_hides = true
+#
+# [[key]]
+# press = "f12"
+# action = "terminal-dropdown"
 
 # [shell] says what Tessera does as the shell of the session, in the place of
 # Explorer (`tessera shell install` makes it that at the next sign-in,

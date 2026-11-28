@@ -40,6 +40,7 @@ per_folder = false    # each folder keeps its own look, zoom, order and groups
 restore = false       # a window opened without a folder opens with the tabs of the last one closed
 explorer = true       # follow Explorer's folder options: extensions, hidden and protected files, desktop.ini names
 autoplay = "shell"    # AutoPlay for drives that arrive: "shell" (only as the shell), "always" or "off"
+restore_windows = false # the windows open at the end open again at the next start, with their tabs
 
 [[key]]
 press = "win+e"
@@ -55,6 +56,43 @@ From a console, `tessera files`, `tessera files computer` and `tessera files D:\
 `autoplay` says when Tessera does AutoPlay for a drive that arrives (a USB stick, a memory card, a disc): by default only as the shell, since Explorer does it otherwise and both would ask. What the drive holds is looked at (its first 400 entries, at the top and one folder down), the handlers Windows has registered for it are read, and the choice made in Settings > AutoPlay is run at once; where Windows is to ask, the notice of the drive (or a notice of its own, where `[notices]` tells of no drives) offers "Choose what to do", which opens the popup `autoplay` with the handlers, "Open folder to view files" (in Tessera Files where `own = true`) and "Take no action". What is chosen there is kept for that kind of drive, as Windows keeps it. `DisableAutoplay` of the user and the policy `NoDriveTypeAutoRun` switch it off.
 
 `tessera files home` (or `files = "home"`) opens Quick access: the folders Explorer keeps there and the files used lately; `tessera files computer` opens the drives and `tessera files recycle-bin` the Recycle Bin. With `restore = true`, `tessera files` and a `files` key without a folder open the tabs of the last window closed instead of the folder of the user; they are kept in `%LOCALAPPDATA%\tessera\files-session.toml`, with the shares of other computers visited, which the side shows under Network. With `per_folder = true` the looks of the folders are kept in `%LOCALAPPDATA%\tessera\files-views.toml`, the 500 seen last; neither file is configuration, and either can be deleted to forget what it holds. `explorer = true` reads the folder options of Explorer (`HideFileExt`, `Hidden` and `ShowSuperHidden` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced`) each time a folder is read; with `explorer = false` every name is shown as it is and protected files of the system show with the hidden ones. `hidden = true` shows hidden files whatever Explorer says; Ctrl+H switches them for a pane.
+
+`restore_windows = true` opens the windows of the file manager that were open when Tessera ended again at its next start, as Explorer's "Restore previous folder windows at logon" does: each where it was on the screen, maximized where it was, with its tabs. They are written to `%APPDATA%\tessera\files-windows.toml` as Tessera ends and every 30 seconds while windows change (and a moment after one closes), since a session may end before the shell is told; the file can be deleted to forget them.
+
+### The terminal
+
+F4, **Terminal** in the View menu or the terminal button of the toolbar shows a terminal under the panes of a window of the file manager, and hides it again (a hidden one keeps its shell). Its height is dragged at the divider above it and kept for every window in `%LOCALAPPDATA%\tessera\files-terminal.toml`. It starts in the folder of the pane in front and goes with the pane to other folders of the file system, while its shell waits at its prompt: the line typed so far is cleared and `cd /d "<folder>"` (cmd), `Set-Location -LiteralPath '<folder>'` (PowerShell) or `cd '<folder as WSL names it>'` is typed. A shell that runs a program of its own is left where it is, and places of the Shell without a path leave the terminal where it was. The other way, the pane goes where the shell says it went, with `pane_follows`: shells say so with OSC 7 (`file://host/path`, as shells of Linux and configured PowerShell prompts write it) or OSC 9;9 (`"C:\path"`). cmd is given the prompt `$e]9;9;$P$e\$P$G`, which does that, where the environment of Tessera sets no `PROMPT`; for PowerShell, a `prompt` function in `$PROFILE` can write it, as Windows Terminal describes.
+
+The `terminal` widget holds terminals in tabs, and the module brings a popup of the same name that holds it (its terminals end when the popup closes). The action `terminal-dropdown` slides a window of such tabs down from the top of the display under the pointer, as Yakuake does, and up again; its shells go on running while it is hidden. No key is bound to it by default; for example:
+
+```toml
+[[key]]
+press = "f12"
+action = "terminal-dropdown"
+```
+
+In any of them, Ctrl+Shift+C copies what is selected (a double click selects a word, a triple click a line, Shift with a click extends the selection), Ctrl+Shift+V, Shift+Insert or a right click pastes (a right click copies and lets go of a selection where there is one), Shift+PageUp and Shift+PageDown and the wheel scroll the lines kept, and Ctrl with a click opens the address or the path under the pointer (a path that is not whole is looked for in the folder of the shell). In the tabs, Ctrl+Shift+T opens a tab in the folder of the one in front, Ctrl+Shift+W closes one, and Ctrl+PageUp and Ctrl+PageDown go from one to the next. When the shell ends, the terminal says `[exited N]`, and a key starts it again.
+
+`[terminal]` sets every terminal of Tessera:
+
+```toml
+[terminal]
+# shell = "cmd"           # pwsh, powershell, cmd, wsl, wsl:<distribution> or a command line;
+#                         # PowerShell 7 where it is installed, else Windows PowerShell, while unset
+font = "Cascadia Mono"    # falls back to Consolas, then Courier New, where it is not installed
+font_size = 13            # in pixels, 6 to 48
+line_height = 1.25        # a share of the size of the font, 0.8 to 3
+scrollback = 10000        # lines kept, up to 100000
+palette = []              # up to 16 colors, "#rrggbb", black to bright white; the theme gives the rest
+cursor = "block"          # "underline", "beam", or "block-steady" and so on to keep it from blinking
+copy_on_select = false    # what is selected goes to the clipboard at once
+pane_follows = true       # the pane of the file manager goes where the shell under it says it went
+dropdown_width = 1.0      # the share of the width of the display the drop-down terminal takes
+dropdown_height = 0.5     # and of its height, at the top of what the bars leave
+dropdown_hides = true     # it hides when another window takes the keys
+```
+
+The colors of text, background, cursor and selection come from the theme, and the 16 named colors are those of Windows Terminal for a dark theme and a lighter set for a light one, each replaced where `palette` gives one; programs pick the other 240 of the 256 by number, or any color as true color. A command line in `shell` is run as it is written; Windows Terminal's profiles are not looked up by name. Programs of the whole screen (pagers, editors) get the wheel as the arrows, and take keys as xterm sends them: the arrows of the application cursor mode, the function keys, Ctrl with a letter as its control character and Alt as an escape before the key; text typed comes through the input methods of Windows.
 
 `[file_view]` sets the pictures of files and the panes beside the panes of files:
 
@@ -182,6 +220,7 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `window-menu` | none | opens the window menu of the window in front; Alt+F3 is bound by default where the keys of Windows are |
 | `kill-window` | none | covers the displays; a click on a window asks whether its program is to be ended at once, as [the window menu](#snapping-window-rules-and-hot-corners) describes; Ctrl+Alt+Esc is bound by default where the keys of Windows are |
 | `files` | a folder, as `files` names one, or none | opens a window of the file manager there, as `files = "..."` does; without `arg`, at the folder of the user; its keys are taken from Windows, and it brings Win+E where `windows_keys` is on |
+| `terminal-dropdown` | none | slides the [drop-down terminal](#the-terminal) down from the top of the display under the pointer, or up and out of sight, where its shells go on running. It brings no key |
 | `files-default` | `on` or `off` | `on` has other programs open the folders and drives of the file system in Tessera Files, as `tessera files install` does; `off` gives that back, as `tessera files revert` does. A notice says how it went |
 | `share` | paths separated by `\|` | opens the share window of Windows (nearby sharing, mail, the applications that take files) for those files and folders, over the window of Tessera in front. Brings no key |
 | `map-drive` | none | shows the dialog "Map Network Drive" of Windows, with "Reconnect at sign-in" checked |
