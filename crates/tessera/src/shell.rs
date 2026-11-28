@@ -204,6 +204,7 @@ impl Shell {
             cards: Cards::default(),
             extensions,
         });
+        crate::taskbar_state::HideOverride::start(cx);
         Self::show_cards_later(cx);
         Self::watch(cx);
         Self::answer_windows_key(cx);
@@ -642,13 +643,16 @@ impl Shell {
         for display in cx.displays() {
             let (name, device) = KnownDisplays::name_of(display.id(), cx);
             let is_primary = KnownDisplays::is_primary(name.as_ref(), display.id(), cx);
-            let layouts: Vec<_> = config
+            let mut layouts: Vec<_> = config
                 .surfaces
                 .iter()
                 .enumerate()
                 .filter(|(_, layout)| layout.displays.includes(name.as_ref(), is_primary))
                 .map(|(index, layout)| (index, layout.on_display(name.as_ref())))
                 .collect();
+            // The taskbar hides or stays as a program last asked, for the
+            // session.
+            crate::taskbar_state::HideOverride::apply(is_primary, &mut layouts, cx);
             // How far from each edge the next surface that hides stands:
             // past the surfaces that keep that edge.
             let mut insets = EdgeInsets::default();

@@ -46,6 +46,9 @@ pub enum MoveEvent {
     /// The window being resized has this frame now, what is seen of it on
     /// the screen; only between its Start and its End, at most 60 times a
     /// second, and only when its size changed.
+    /// The window being resized has this frame now; only between its Start
+    /// and its End, at most 60 times a second. Fired by edges-snap's hook.
+    #[allow(dead_code, reason = "fired once edges-snap watches the resizing")]
     Resizing {
         id: AppWindowId,
         frame: ScreenRect,

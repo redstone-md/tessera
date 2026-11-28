@@ -20,7 +20,12 @@
 //! Edge bars reach Explorer through the same window, the shell's own
 //! surfaces among them, so their requests are passed on as well. The
 //! private messages of `ITaskbarList` do not come here but to the window
-//! the shell registers as the task manager.
+//! the shell names in the property `TaskbandHWND` (taskbar_list.rs).
+//!
+//! The window stands where the taskbar stands and holds the windows
+//! programs look for inside the taskbar (frame.rs). The numbered commands
+//! scripts post to the taskbar with `WM_COMMAND` go on to Explorer beside
+//! it, and are answered by the shell without it (commands.rs).
 //!
 //! A message posted to an application that runs with higher privileges
 //! than the shell is dropped by Windows, so such an application does not
@@ -29,9 +34,12 @@
 //! from it in turn.
 
 mod balloon;
+mod commands;
+mod frame;
 mod promoted;
 
 pub use balloon::{Balloon, BalloonEvent, BalloonKind};
+pub use commands::TrayCommand;
 pub use promoted::TrayPromotion;
 
 use std::cell::Cell;
@@ -55,7 +63,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowThreadProcessId, HICON, HWND_BROADCAST, HWND_TOPMOST, IsWindow, MSG, MSGFLT_ALLOW,
     PostMessageW, RegisterClassW, RegisterWindowMessageW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SendMessageW, SendNotifyMessageW, SetForegroundWindow, SetTimer, SetWindowPos,
-    TranslateMessage, WM_CONTEXTMENU, WM_COPYDATA, WM_DISPLAYCHANGE, WM_LBUTTONDBLCLK,
+    TranslateMessage, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_DISPLAYCHANGE, WM_LBUTTONDBLCLK,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER, WM_USER,
     WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
@@ -831,6 +839,21 @@ impl Tray {
         focus_channel().1.clone()
     }
 
+    /// What programs ask of the taskbar with `ABM_SETSTATE` while the shell
+    /// serves the edge bars, where it is not what the taskbar does: `true`
+    /// to hide, `false` to stay. One reader is meant to take them.
+    pub fn hiding_requests() -> Receiver<bool> {
+        appbar::hiding_requests()
+    }
+
+    /// The numbered commands programs post to the taskbar while the shell
+    /// serves it, as `Shell.Application` does for `MinimizeAll`. Beside
+    /// Explorer they go to Explorer and none arrive. One reader is meant
+    /// to take them.
+    pub fn commands() -> Receiver<TrayCommand> {
+        commands::subscribe()
+    }
+
     /// The choices the user made in the settings of Windows about which
     /// icons stand in the taskbar and which in its overflow. Reading the
     /// registry waits, so this does not belong on the thread that draws.
@@ -990,6 +1013,7 @@ fn create_window() -> Result<HWND> {
             let _ = ChangeWindowMessageFilterEx(window, created, MSGFLT_ALLOW, None);
         }
         raise(window);
+        frame::make(window);
         Ok(window)
     }
 }
@@ -1169,6 +1193,29 @@ fn upkeep(window: HWND) {
     if serving {
         appbar::upkeep(window);
     }
+    follow_taskbar(window, serving);
+}
+
+/// Has the window and the windows inside it stand where the taskbar is,
+/// as `serving` says: where Tessera's taskbar stands, with its icons, and
+/// with a secondary taskbar on each other display with a bar; or where
+/// Explorer's taskbar stands, which keeps its own secondary taskbars.
+fn follow_taskbar(window: HWND, serving: bool) {
+    if !serving {
+        if let Some(layout) = explorer_tray(window).and_then(frame::explorer_layout) {
+            frame::place(window, layout);
+        }
+        frame::follow_secondaries(&[]);
+        return;
+    }
+    if let Some((edge, bar)) = appbar::taskbar_frame() {
+        let icons: Vec<ScreenRect> = {
+            let known = icons();
+            known.places.values().map(|place| place.frame).collect()
+        };
+        frame::place(window, frame::lay_out(edge, bar, &icons));
+    }
+    frame::follow_secondaries(&appbar::secondary_frames());
 }
 
 /// The window procedure: records icons, keeps the window first, and passes
@@ -1206,7 +1253,11 @@ unsafe extern "system" fn receive(
                     }
                 }
                 (EDGE_BAR_DATA, Some(bytes)) if explorer.is_none() => {
-                    return appbar::serve(window, bytes);
+                    let answer = appbar::serve(window, bytes);
+                    // Only windows of this thread move, none of the bar
+                    // that waits for the answer.
+                    follow_taskbar(window, true);
+                    return answer;
                 }
                 _ => {}
             }
@@ -1221,6 +1272,20 @@ unsafe extern "system" fn receive(
         }
         WM_TIMER => {
             upkeep(window);
+            LRESULT(0)
+        }
+        // A numbered command, posted by a script or `Shell.Application`:
+        // Explorer's beside it; otherwise handed to the shell, which is
+        // never waited for.
+        WM_COMMAND => {
+            match explorer_tray(window) {
+                // SAFETY: posting passes the numbers as they came and
+                // fails harmlessly for a window that is gone.
+                Some(explorer) => unsafe {
+                    let _ = PostMessageW(Some(explorer), WM_COMMAND, wparam, lparam);
+                },
+                None => commands::received((wparam.0 & 0xFFFF) as u16),
+            }
             LRESULT(0)
         }
         // Decided as for the requests of the bars, not by the last upkeep:

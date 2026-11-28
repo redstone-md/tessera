@@ -12,6 +12,8 @@
 //! browser unless a binding asks for them without keys held. Windows does
 //! not show the hook presses meant for a program that runs with more
 //! rights than Tessera.
+//! Only the types and the way to bind are here so far; nothing is reported
+//! until the presses are taken in the mouse hook (mouse_hook.rs).
 
 use async_channel::{Receiver, Sender};
 use std::sync::{Mutex, PoisonError};
@@ -20,6 +22,10 @@ use super::Modifiers;
 
 /// A mouse button a shortcut can be bound to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[allow(
+    dead_code,
+    reason = "bound by shortcuts-editor, reported by window-rules-editor"
+)]
 pub enum MouseButtonName {
     Middle,
     /// The first side button (`XBUTTON1`).
@@ -30,6 +36,10 @@ pub enum MouseButtonName {
 
 /// A press of a mouse button with the keys held during it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[allow(
+    dead_code,
+    reason = "bound by shortcuts-editor, reported by window-rules-editor"
+)]
 pub struct MouseBinding {
     pub held: Modifiers,
     pub button: MouseButtonName,
@@ -116,5 +126,24 @@ mod tests {
             Some(1)
         );
         assert_eq!(binding_of(&bindings, MouseButtonName::Forward, ctrl), None);
+    }
+}
+/// The sender of the set bound last, kept so that its receiver stays open.
+static BOUND: Mutex<Option<Sender<usize>>> = Mutex::new(None);
+
+#[allow(
+    dead_code,
+    reason = "bound by shortcuts-editor, reported by window-rules-editor"
+)]
+impl MouseButtons {
+    /// From now on the presses of `bindings` are swallowed and each is
+    /// reported as its index in `bindings`; a new call replaces the set.
+    /// Stub: nothing is reported until window-rules-editor implements it
+    /// in mouse_hook.rs.
+    pub fn bind(bindings: Vec<MouseBinding>) -> Receiver<usize> {
+        drop(bindings);
+        let (sender, receiver) = async_channel::unbounded();
+        *BOUND.lock().unwrap_or_else(PoisonError::into_inner) = Some(sender);
+        receiver
     }
 }

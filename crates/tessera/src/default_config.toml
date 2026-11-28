@@ -726,6 +726,10 @@
 # thickness = 48
 # displays = "others"
 # hide = true
+# (A program that asks the taskbar to hide or to stay, with SHAppBarMessage,
+# has the first strip of the primary display that keeps its edge hide, or
+# the first of those that hide keep its edge, until Tessera ends; this file
+# is not changed.)
 # length = 0.6
 # opacity = 0.8
 # start = ["workspaces", "separator", { widget = "spacer", flexible = true }]

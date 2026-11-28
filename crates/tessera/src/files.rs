@@ -464,11 +464,15 @@ impl Files {
         if let Err(error) = start_explorer(&line, false) {
             report!("{error:#}");
         }
+    #[allow(dead_code, reason = "implemented by files-namespace")]
+    pub fn open_shell(_parsing: &str, _cx: &mut App) -> bool {
+        false
     }
 
     /// Sends the window `hwnd` of the file manager to the place named
     /// `parsing`; false where no such window is open or the name is none
     /// it can show: a folder, or a place of the Shell.
+    /// it can show (files-namespace adds the places of the Shell).
     #[allow(dead_code, reason = "for the windows of the Shell of shell-services")]
     pub fn navigate(hwnd: isize, parsing: &str, cx: &mut App) -> bool {
         let Some(window) = Self::windows(cx).into_iter().find(|each| each.hwnd == hwnd) else {

@@ -890,6 +890,7 @@ impl Snapper {
                     MoveEvent::Start(id) => Self::begin(id, cx),
                     MoveEvent::End(id) => Self::finish(id, cx),
                     MoveEvent::Resizing { id, frame } => Self::resized(id, frame, cx),
+                    MoveEvent::Resizing { .. } => {}
                 });
                 if handled.is_err() {
                     break;

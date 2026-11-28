@@ -5,6 +5,13 @@
 //! side by side, each with its title, a button that closes it, and the
 //! buttons its application put under its picture; under them, the
 //! controls of what the application plays.
+//!
+//! A picture shows only the part of the window its application asked for
+//! with `SetThumbnailClip`. A window whose application registered tabs
+//! with the taskbar (`RegisterTab`) shows each tab apart, with the picture
+//! the window that stands for the tab gives, or the live picture of the
+//! whole window where the application asked for that; a click on a tab
+//! activates it, and its close button closes it.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -22,7 +29,7 @@ use crate::peek::Peek;
 use crate::performance::Performance;
 use crate::platform::{
     AppWindowId, Media, MediaCommand, NativeSurface, ScreenEdge, ScreenRect, SessionKey,
-    TaskbarList, ThumbButton, Thumbnail,
+    TaskbarList, ThumbButton, Thumbnail, WindowTab,
 };
 use crate::popup::{
     MARGIN, PopupAnchor, floating_panel, floating_travel, open_floating, retire_floating,
@@ -237,34 +244,50 @@ impl Previews {
             size: size(px(PICTURE_WIDTH), px(PICTURE_HEIGHT)),
         };
         // The room the display leaves for the pictures side by side.
+        // A window with tabs shows each of its tabs instead.
+        let shown = expand(&targets, TaskbarList::tabs_of);
         let room = (anchor.screen.right - anchor.screen.left) as f32 / scale - MARGIN * 2.;
-        let room = room - padding * (targets.len() as f32 + 1.);
+        let room = room - padding * (shown.len() as f32 + 1.);
         open_floating(rough, anchor.display_id, false, cx, |window, cx| {
             let native = NativeSurface::of(window);
             // Performance mode skips the live pictures.
             let live = !Performance::minimal(cx);
-            let thumbnails: Vec<Option<Thumbnail>> = { targets.iter() }
-                .map(|&target| {
+            // The largest picture a tab is asked for, in physical pixels.
+            let largest = (
+                (PICTURE_WIDTH * scale).round() as u16,
+                (PICTURE_HEIGHT * scale).round() as u16,
+            );
+            let thumbnails: Vec<Option<Thumbnail>> = { shown.iter() }
+                .map(|shown| {
                     let native = native.as_ref().ok().filter(|_| live)?;
-                    Thumbnail::of(target, *native).ok()
+                    if shown.asks_for_picture() {
+                        Thumbnail::ask_for_iconic(shown.id, Some(largest));
+                    }
+                    Thumbnail::of(shown.pictured(), *native).ok()
                 })
                 .collect();
-            let sources: Vec<Option<(f32, f32)>> = { thumbnails.iter() }
-                .map(|thumbnail| {
-                    thumbnail
-                        .as_ref()?
-                        .source_size()
-                        .map(|source| fit(source, scale))
+            let clips: Vec<Option<ScreenRect>> = shown.iter().map(Shown::clip).collect();
+            let sources: Vec<Option<(f32, f32)>> = { thumbnails.iter().zip(&clips).zip(&shown) }
+                .map(|((thumbnail, clip), shown)| {
+                    let thumbnail = thumbnail.as_ref()?;
+                    let size = clip.map(|clip| (clip.right - clip.left, clip.bottom - clip.top));
+                    // The picture a tab gives may not be there yet.
+                    let asked = shown.asks_for_picture().then_some(largest);
+                    let asked = asked.map(|(width, height)| (i32::from(width), i32::from(height)));
+                    let size = size.or_else(|| thumbnail.source_size()).or(asked)?;
+                    Some(fit(size, scale))
                 })
                 .collect();
             let (pictures, factor) = lay_out(&sources, room);
             let theme = cx.global::<Theme>();
-            let tiles: Vec<Tile> = { targets.iter().zip(thumbnails).zip(pictures) }
-                .map(|((&id, thumbnail), picture)| Tile {
-                    id,
-                    title: id.title().into(),
+            let tiles: Vec<Tile> = { shown.iter().zip(thumbnails).zip(pictures).zip(clips) }
+                .map(|(((shown, thumbnail), picture), clip)| Tile {
+                    id: shown.id,
+                    tab_of: shown.tab_of,
+                    title: shown.id.title().into(),
                     thumbnail: thumbnail.filter(|_| picture.is_some()),
                     picture: picture.unwrap_or_default(),
+                    clip,
                     close: Interaction::new(&theme.motion),
                     buttons: Vec::new(),
                 })
@@ -308,6 +331,112 @@ fn fit((width, height): (i32, i32), scale: f32) -> (f32, f32) {
     (width * factor, height * factor)
 }
 
+/// What a tile of a preview shows: a window, or a tab of a window with
+/// several documents, as its application registered it with the taskbar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Shown {
+    /// The window, or the hidden window that stands for the tab.
+    id: AppWindowId,
+    /// For a tab, the window it is a tab of.
+    tab_of: Option<AppWindowId>,
+    /// For a tab, whether its picture is the live one of the whole window.
+    live: bool,
+}
+
+impl Shown {
+    /// The window whose picture Windows draws: the window itself, the
+    /// window of a tab, which gives a picture of its own, or the whole
+    /// window for a tab that asked for that.
+    fn pictured(&self) -> AppWindowId {
+        match (self.tab_of, self.live) {
+            (Some(window), true) => window,
+            _ => self.id,
+        }
+    }
+
+    /// Whether the window of a tab is to be asked for its picture, as it
+    /// draws none by itself.
+    fn asks_for_picture(&self) -> bool {
+        self.tab_of.is_some() && !self.live
+    }
+
+    /// The part of the window its application asked its picture to show,
+    /// for a window that is no tab.
+    fn clip(&self) -> Option<ScreenRect> {
+        match self.tab_of {
+            Some(_) => None,
+            None => TaskbarList::read(self.id, |state| state.clip).flatten(),
+        }
+    }
+
+    /// Activates what the tile shows: the window, or the tab as the taskbar
+    /// does.
+    fn activate(&self) {
+        match self.tab_of {
+            Some(window) => TaskbarList::activate_tab(window, self.id),
+            None => self.id.activate(),
+        }
+    }
+
+    /// Closes what the tile shows: the window, or the tab.
+    fn close(&self) {
+        match self.tab_of {
+            Some(_) => TaskbarList::close_tab(self.id),
+            None => self.id.close(),
+        }
+    }
+}
+
+/// What the tiles of a preview of `targets` show: each window, or each of
+/// its tabs, as `tabs_of` gives them, in their order.
+fn expand(targets: &[AppWindowId], tabs_of: impl Fn(AppWindowId) -> Vec<WindowTab>) -> Vec<Shown> {
+    let mut shown = Vec::new();
+    for &target in targets {
+        let tabs = tabs_of(target);
+        if tabs.is_empty() {
+            shown.push(Shown {
+                id: target,
+                tab_of: None,
+                live: true,
+            });
+        }
+        shown.extend(tabs.into_iter().map(|tab| Shown {
+            id: tab.window,
+            tab_of: Some(target),
+            live: tab.live_picture,
+        }));
+    }
+    shown
+}
+
+/// The part of `area` a picture of `source` takes, kept in its shape and
+/// centred; all of `area` without a source or for an empty one.
+fn fitted(area: ScreenRect, source: Option<ScreenRect>) -> ScreenRect {
+    let Some(source) = source else {
+        return area;
+    };
+    let (width, height) = (source.right - source.left, source.bottom - source.top);
+    let (room_width, room_height) = (area.right - area.left, area.bottom - area.top);
+    if width <= 0 || height <= 0 || room_width <= 0 || room_height <= 0 {
+        return area;
+    }
+    let factor = (room_width as f32 / width as f32).min(room_height as f32 / height as f32);
+    let (shown_width, shown_height) = (
+        (width as f32 * factor).round() as i32,
+        (height as f32 * factor).round() as i32,
+    );
+    let (left, top) = (
+        area.left + (room_width - shown_width) / 2,
+        area.top + (room_height - shown_height) / 2,
+    );
+    ScreenRect {
+        left,
+        top,
+        right: left + shown_width,
+        bottom: top + shown_height,
+    }
+}
+
 /// The pictures `pictures` shrunk alike until they fit side by side into
 /// `room`, each as wide as [`LEAST_WIDTH`] at least; a missing picture
 /// takes that width. The factor they were shrunk by comes with them, 1
@@ -349,17 +478,34 @@ struct MediaRow {
 
 /// The picture of one window and what belongs to it.
 struct Tile {
+    /// The window, or the window that stands for a tab.
     id: AppWindowId,
+    /// For a tab, the window it is a tab of.
+    tab_of: Option<AppWindowId>,
     /// The tooltip its application gave its picture, or its title.
     title: SharedString,
     /// Absent when Windows gives no picture.
     thumbnail: Option<Thumbnail>,
     /// The logical size of the picture.
     picture: (f32, f32),
+    /// The part of the window its application asked the picture to show,
+    /// in the window's physical pixels.
+    clip: Option<ScreenRect>,
     close: Interaction,
     /// The buttons its application put under its picture, each with its
     /// icon and its pointer feedback.
     buttons: Vec<(ThumbButton, Icon, Interaction)>,
+}
+
+impl Tile {
+    /// What the tile shows, to activate or close it.
+    fn shown(&self) -> Shown {
+        Shown {
+            id: self.id,
+            tab_of: self.tab_of,
+            live: false,
+        }
+    }
 }
 
 /// The root view of a preview: the tiles of the windows side by side, and
@@ -401,12 +547,15 @@ impl PreviewView {
             return;
         }
         self.hovered = Some(id);
+        // A peek at a tab shows the window it is a tab of.
+        let tile = self.tiles.iter().find(|tile| tile.id == id);
+        let peeked = tile.and_then(|tile| tile.tab_of).unwrap_or(id);
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             cx.background_executor().timer(PEEK_DELAY).await;
             this.update(cx, |this, cx| {
                 if this.hovers == hovers && this.hovered == Some(id) && !this.closing {
                     this.peeking = true;
-                    Peek::show(id, cx);
+                    Peek::show(peeked, cx);
                 }
             })
             .ok();
@@ -470,6 +619,9 @@ impl PreviewView {
         for tile in &mut self.tiles {
             let told = TaskbarList::state(tile.id).unwrap_or_default();
             tile.title = told.tooltip.unwrap_or_else(|| tile.id.title()).into();
+            if tile.tab_of.is_none() {
+                tile.clip = told.clip;
+            }
             let kept = std::mem::take(&mut tile.buttons);
             tile.buttons = { told.buttons.into_iter() }
                 .map(|button| {
@@ -604,6 +756,7 @@ impl PreviewView {
             .fold(0., f32::max);
         let tile = &mut self.tiles[index];
         let target = tile.id;
+        let shown = tile.shown();
         let (width, height) = tile.picture;
         let state = tile.close.state(window);
         let close = div()
@@ -617,7 +770,7 @@ impl PreviewView {
             .bg(state_layer(theme, theme.colors.surface_container, state))
             .text_color(theme.colors.on_surface_variant)
             .on_click(cx.listener(move |this, _, _, cx| {
-                target.close();
+                shown.close();
                 this.forget(target, cx);
             }))
             .child(icon(theme, ICON_CLOSE).text_size(theme.typography.label_size));
@@ -641,13 +794,13 @@ impl PreviewView {
                 .flex_none()
                 .bg(theme.colors.surface_container_highest)
                 .on_click(move |_, _, cx| {
-                    target.activate();
+                    shown.activate();
                     cx.defer(Previews::close);
                 })
                 .on_mouse_down(
                     MouseButton::Middle,
                     cx.listener(move |this, _, _, cx| {
-                        target.close();
+                        shown.close();
                         this.forget(target, cx);
                     }),
                 )
@@ -869,8 +1022,10 @@ impl Render for PreviewView {
         }
         for index in 0..self.tiles.len() {
             let area = self.picture_area(index, padding, visibility, window);
-            if let Some(thumbnail) = &self.tiles[index].thumbnail {
-                thumbnail.place(area, visibility);
+            let tile = &self.tiles[index];
+            if let Some(thumbnail) = &tile.thumbnail {
+                // Only the part the application asked for, in its shape.
+                thumbnail.place_part(fitted(area, tile.clip), tile.clip, visibility);
             }
         }
         let tiles: Vec<AnyElement> = { 0..self.tiles.len() }
@@ -953,5 +1108,53 @@ mod tests {
         };
         assert!(program.plays("spotify.EXE"));
         assert!(!PreviewOwner::default().plays("Spotify.exe"));
+    }
+
+    #[test]
+    fn a_window_with_tabs_shows_each_tab() {
+        let id = AppWindowId::from_raw;
+        let tab = |window: isize, live: bool| WindowTab {
+            window: id(window),
+            active: false,
+            live_picture: live,
+            live_peek: false,
+        };
+        let tabs_of = |window: AppWindowId| match window.raw() {
+            1 => vec![tab(11, false), tab(12, true)],
+            _ => Vec::new(),
+        };
+        let shown = expand(&[id(1), id(2)], tabs_of);
+        let windows: Vec<(isize, Option<isize>)> = { shown.iter() }
+            .map(|shown| (shown.id.raw(), shown.tab_of.map(AppWindowId::raw)))
+            .collect();
+        assert_eq!(windows, [(11, Some(1)), (12, Some(1)), (2, None)]);
+        // A tab draws its own picture, unless it asked for the window's.
+        assert_eq!(shown[0].pictured(), id(11));
+        assert!(shown[0].asks_for_picture());
+        assert_eq!(shown[1].pictured(), id(1));
+        assert!(!shown[1].asks_for_picture());
+        assert_eq!(shown[2].pictured(), id(2));
+    }
+
+    #[test]
+    fn a_clipped_picture_keeps_the_shape_of_its_part() {
+        let rect = |left, top, right, bottom| ScreenRect {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        let area = rect(10, 20, 210, 120);
+        assert_eq!(fitted(area, None), area);
+        // A square part stands in the middle of a wide area.
+        assert_eq!(
+            fitted(area, Some(rect(0, 0, 50, 50))),
+            rect(60, 20, 160, 120)
+        );
+        assert_eq!(
+            fitted(area, Some(rect(0, 0, 400, 100))),
+            rect(10, 45, 210, 95)
+        );
+        assert_eq!(fitted(area, Some(rect(5, 5, 5, 9))), area);
     }
 }

@@ -293,7 +293,13 @@ pub fn is_bare_server(name: &str) -> bool {
     let rest = name.trim().trim_end_matches('\\');
     rest.strip_prefix("\\\\")
         .is_some_and(|server| !server.is_empty() && !server.contains('\\'))
+        (path.is_absolute() && path.is_dir()).then(|| Self::Folder(path.to_owned()))
+    }
 }
+
+/// The parsing names of the Recycle Bin and of This PC.
+const RECYCLE_BIN_PARSING: &str = "::{645FF040-5081-101B-9F08-00AA002F954E}";
+const COMPUTER_PARSING: &str = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
 
 /// The locations a window went through, to go back and forth among them
 /// as a browser does.

@@ -169,6 +169,8 @@ impl Actions {
     /// or holds them again: without an argument it does the other of the
     /// two, `on` pauses and `off` holds them again.
     pub(crate) fn builtin() -> Vec<(&'static str, Action)> {
+    /// popup.
+    pub(crate) fn builtin() -> [(&'static str, Action); 1] {
         let popup = Action::new(|name, cx| Shell::toggle_popup(name.unwrap_or_default(), cx))
             .taking_reserved_keys()
             .checking(|name| match name {

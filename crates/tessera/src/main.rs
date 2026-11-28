@@ -54,6 +54,7 @@ mod snap;
 mod startup;
 mod surface;
 mod switcher;
+mod taskbar_state;
 mod taskview;
 mod terminal;
 mod theme;

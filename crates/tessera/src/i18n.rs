@@ -3800,6 +3800,34 @@ const RUSSIAN: &[(&str, &str)] = &[
     (
         "Not available yet: the protocol waits to be confirmed on Windows.",
         "Пока недоступно: протокол ждёт подтверждения в Windows.",
+    // taskbar-fidelity: jump list pins and the Tray card of the settings.
+    ("Pin to this list", "Закрепить в этом списке"),
+    ("Unpin from this list", "Открепить от этого списка"),
+    ("Remove from this list", "Удалить из этого списка"),
+    ("Where the icons stand", "Где стоят значки"),
+    ("Notification area", "Область уведомлений"),
+    ("Overflow", "Скрытые значки"),
+    ("New icons", "Новые значки"),
+    (
+        "Where an icon goes that no list here and no choice in the settings of Windows places.",
+        "Куда попадает значок, который не размещён ни одним списком здесь, ни выбором в параметрах Windows.",
+    ),
+    ("In the bar", "На панели"),
+    ("In the overflow", "В скрытых"),
+    ("Always in the bar", "Всегда на панели"),
+    (
+        "Icons by their identifier, by their program and number (app.exe#1), or by their program alone.",
+        "Значки по их идентификатору, по программе и номеру (app.exe#1) или только по программе.",
+    ),
+    ("Always in the overflow", "Всегда в скрытых"),
+    (
+        "Named as above; of two entries that name an icon, the closer one decides.",
+        "Указываются так же; из двух записей, называющих значок, решает более точная.",
+    ),
+    ("Order of the icons", "Порядок значков"),
+    (
+        "The icons named come first, in this order, in the bar and in the overflow alike; the others follow as they came.",
+        "Названные значки идут первыми, в этом порядке, на панели и в скрытых; остальные следуют в порядке появления.",
     ),
 ];
 

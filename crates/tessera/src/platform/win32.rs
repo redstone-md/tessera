@@ -199,6 +199,7 @@ pub use input_names::OwnInput;
 pub use jump::EXPLORER_APP_ID;
 pub use jump::app_id_of_program;
 pub use jump::{JumpItem, JumpList, JumpTarget, KnownCategory};
+pub use jump::{Relaunch, relaunch_of};
 pub use key_locks::{KeyLocks, window_in_front};
 pub use keyboard::{InputLanguage, Typing};
 pub use lasting::WindowMark;
@@ -275,12 +276,14 @@ pub use taskbar_list::{
     GivenIcon, Progress, ProgressState, TaskbarList, TaskbarState, ThumbButton,
 };
 pub use taskbar_pins::{scheme_handler, windows_taskbar_pins};
+pub use taskbar_list::{WindowTab, marked_fullscreen};
 pub use terminal::{terminal, windows_terminal};
 pub use thumbnail::Thumbnail;
 pub use thumbnails::{LARGEST_THUMBNAIL, ThumbnailKind, Thumbnails};
 pub use tile_border::TileBorder;
 pub use touch_keyboard::TouchKeyboard;
 pub use tray::BalloonKind;
+pub use tray::TrayCommand;
 pub use tray::TrayPromotion;
 pub use tray::{Balloon, BalloonEvent};
 pub use tray::{Tray, TrayButton, TrayIcon};
@@ -828,7 +831,18 @@ impl NativeSurface {
     /// the room left to windows: Windows moves a game out of an edge that
     /// gets reserved while it runs, and it stays there.
     pub fn display_is_filled(self) -> bool {
-        let windows = AppWindow::enumerate().into_iter();
+        let windows = AppWindow::enumerate();
+        // A window its application marked as full screen fills its
+        // display, whatever its frame.
+        // SAFETY: the call only reads which display the surface is on.
+        let display = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) };
+        let marked = windows.iter().any(|window| {
+            taskbar_list::marked_fullscreen(window.id) && taskbar_list::shown_on(window.id, display)
+        });
+        if marked {
+            return true;
+        }
+        let windows = windows.into_iter();
         self.filled_among(windows.map(|window| HWND(window.id.raw() as *mut c_void)))
     }
 

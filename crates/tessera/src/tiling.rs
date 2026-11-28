@@ -100,6 +100,8 @@ const LAYOUTS_DIRECTORY: &str = "tiling-layouts";
 /// tile alike again, and the stacks: the window in front into the stack
 /// of the tile on a side, out of its stack, through the windows of its
 /// stack, and the next window into its stack.
+/// are in use, while tiling is on: where the next window opens, and every
+/// tile alike again.
 pub(crate) const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("win+shift+i", "reserve up"),
     ("win+shift+k", "reserve down"),

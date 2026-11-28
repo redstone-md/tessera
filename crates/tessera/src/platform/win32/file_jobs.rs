@@ -18,6 +18,10 @@ use async_channel::{Receiver, Sender};
 
 /// Where a job is.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "published by the jobs of files-namespace and files-search-actions"
+)]
 pub enum FileJobState {
     Running,
     Done,
@@ -31,6 +35,7 @@ pub enum FileJobState {
 #[allow(
     dead_code,
     reason = "read by the notifications of notifications-rich, which show the jobs"
+    reason = "published by the jobs of files-namespace and files-search-actions"
 )]
 pub struct FileJobEvent {
     /// The number of the job, from [`FileJobs::next_id`].
@@ -62,6 +67,10 @@ fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+#[allow(
+    dead_code,
+    reason = "used by files-namespace, files-search-actions and notifications-rich"
+)]
 impl FileJobs {
     /// A number no other job of this process has.
     pub fn next_id() -> u64 {

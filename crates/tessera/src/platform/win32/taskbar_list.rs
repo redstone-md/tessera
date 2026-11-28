@@ -29,14 +29,32 @@
 //! Explorer's own window of the buttons, so applications keep reaching
 //! it, and nothing new is known here.
 //!
-//! Not reached: the buttons an application draws from an image list
-//! (`ThumbBarSetImageList`), which lives in its own process, and the tabs
-//! of windows with several documents (`RegisterTab` and the like), which
-//! no application of today uses.
+//! The tabs of a window with several documents (`RegisterTab`,
+//! `UnregisterTab`, `SetTabOrder`, `SetTabActive` and `SetTabProperties`)
+//! are kept with the window, each tab as the hidden window the
+//! application made to stand for it, which gives the picture of the tab
+//! when it is asked (`WM_DWMSENDICONICTHUMBNAIL`); the dock's previews show
+//! each tab apart, and a click on one activates it as Explorer does, with
+//! `WM_ACTIVATE` to that window. The numbers of these messages are those
+//! ManagedShell's `TasksService` names; their parameters were not seen on
+//! a machine, so the two windows `RegisterTab` and `SetTabActive` name are
+//! told apart by which of them is shown.
+//!
+//! `ThumbBarSetImageList` hands over an image list, which lives in the
+//! process of the application. What its `lParam` holds was not seen: it
+//! is read as memory shared with the shell that holds an image list as
+//! `ImageList_Write` writes one, else as an icon, which any process can
+//! read; what it was is reported once for each window. Where neither
+//! fits, a button that names an image of the list shows the first letter
+//! of its tooltip.
+//!
+//! A window marked as full screen (`MarkFullscreenWindow`) counts as
+//! filling its display when the surfaces look whether to step aside
+//! ([`marked_on`]).
 
 #![allow(unsafe_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
@@ -44,17 +62,22 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONULL, MonitorFromWindow};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery};
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, IsWow64Process, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows::Win32::UI::Shell::{SHLockShared, SHUnlockShared};
+use windows::Win32::UI::Controls::{
+    ILD_NORMAL, ImageList_Destroy, ImageList_GetIcon, ImageList_GetImageCount, ImageList_Read,
+};
+use windows::Win32::UI::Shell::{SHCreateMemStream, SHLockShared, SHUnlockShared};
 use windows::Win32::UI::WindowsAndMessaging::{
     CopyIcon, CreateWindowExW, DefWindowProcW, DestroyIcon, EnumChildWindows, FindWindowExW,
-    GetClassNameW, GetPropW, GetWindowThreadProcessId, HICON, PostMessageW, RegisterClassW,
-    RegisterWindowMessageW, SendNotifyMessageW, SetPropW, SetTimer, WINDOW_EX_STYLE, WM_COMMAND,
-    WM_TIMER, WM_USER, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+    GetClassNameW, GetPropW, GetWindowThreadProcessId, HICON, IsIconic, IsWindowVisible,
+    PostMessageW, RegisterClassW, RegisterWindowMessageW, SendNotifyMessageW, SetPropW, SetTimer,
+    WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_CLOSE, WM_COMMAND, WM_TIMER, WM_USER,
+    WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{BOOL, PCWSTR, w};
 
@@ -65,6 +88,10 @@ const ACTIVATE_TAB: u32 = 50;
 const MARK_FULLSCREEN: u32 = 60;
 const PROGRESS_VALUE: u32 = 64;
 const PROGRESS_STATE: u32 = 65;
+const REGISTER_TAB: u32 = 67;
+const UNREGISTER_TAB: u32 = 68;
+const TAB_ORDER: u32 = 71;
+const TAB_ACTIVE: u32 = 72;
 const ADD_BUTTONS: u32 = 76;
 const UPDATE_BUTTONS: u32 = 77;
 const IMAGE_LIST: u32 = 78;
@@ -72,6 +99,20 @@ const OVERLAY_ICON: u32 = 79;
 const THUMBNAIL_TOOLTIP: u32 = 80;
 const THUMBNAIL_CLIP: u32 = 81;
 const OVERLAY_DESCRIPTION: u32 = 85;
+const TAB_PROPERTIES: u32 = 87;
+
+/// The flags of `SetTabProperties`: the picture, or the peek, of a tab is
+/// that of the whole window, always or while the tab is the active one.
+const STPF_USEAPPTHUMBNAILALWAYS: u32 = 0x1;
+const STPF_USEAPPTHUMBNAILWHENACTIVE: u32 = 0x2;
+const STPF_USEAPPPEEKALWAYS: u32 = 0x4;
+const STPF_USEAPPPEEKWHENACTIVE: u32 = 0x8;
+
+/// What an image list written by `ImageList_Write` starts with.
+const IMAGE_LIST_SIGNATURE: &[u8; 2] = b"IL";
+
+/// The most images read from an image list.
+const MOST_IMAGES: i32 = 64;
 
 /// What a progress value of `ITaskbarList3` is at the end: Windows scales
 /// the two numbers of `SetProgressValue` to this.
@@ -177,6 +218,41 @@ pub struct TaskbarState {
     pub fullscreen: bool,
     /// `DeleteTab` removed the button of the window.
     pub removed: bool,
+    /// The windows that stand for the tabs of this window, in the order
+    /// the application gave them.
+    pub tabs: Vec<AppWindowId>,
+    /// The tab the application said is the active one.
+    pub active_tab: Option<AppWindowId>,
+    /// For a window that stands for a tab: how its picture and its peek
+    /// are drawn, the flags of `SetTabProperties`.
+    pub tab_properties: u32,
+    /// The images of the image list of the buttons, where it was read.
+    pub images: Vec<GivenIcon>,
+}
+
+impl TaskbarState {
+    /// What the overlay of `window` means, as its application described
+    /// it for those who cannot see it; `None` without an overlay or a
+    /// description. The dock puts it in the tooltip of the button.
+    #[allow(dead_code, reason = "the dock reads it once dock-pins is merged")]
+    pub fn overlay_description(window: AppWindowId) -> Option<String> {
+        TaskbarList::read(window, |state| state.overlay_description.clone()).flatten()
+    }
+}
+
+/// A tab of a window with several documents, as its application
+/// registered it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowTab {
+    /// The hidden window that stands for the tab, whose picture shows it.
+    pub window: AppWindowId,
+    /// Whether the application said it is the active tab.
+    pub active: bool,
+    /// Whether the picture of the tab is to be the live picture of the
+    /// whole window, as the application asked for it.
+    pub live_picture: bool,
+    /// Whether a peek at the tab shows the whole window.
+    pub live_peek: bool,
 }
 
 static STATES: Mutex<Option<HashMap<isize, TaskbarState>>> = Mutex::new(None);
@@ -255,6 +331,61 @@ impl TaskbarList {
         states.as_ref()?.get(&window.raw()).map(read)
     }
 
+    /// The tabs the application of `window` registered for it, in their
+    /// order; empty for a window without tabs. Windows of tabs that are
+    /// gone are left out.
+    pub fn tabs_of(window: AppWindowId) -> Vec<WindowTab> {
+        let states = locked(&STATES);
+        let Some(states) = states.as_ref() else {
+            return Vec::new();
+        };
+        let Some(state) = states.get(&window.raw()) else {
+            return Vec::new();
+        };
+        { state.tabs.iter() }
+            .filter(|tab| tab.exists())
+            .map(|&tab| {
+                let active = state.active_tab == Some(tab);
+                let flags = states.get(&tab.raw()).map_or(0, |tab| tab.tab_properties);
+                WindowTab {
+                    window: tab,
+                    active,
+                    live_picture: uses_window(flags, active, PICTURE_FLAGS),
+                    live_peek: uses_window(flags, active, PEEK_FLAGS),
+                }
+            })
+            .collect()
+    }
+
+    /// Activates the tab `tab` of `window` as the taskbar does after a
+    /// click on its picture: the window comes to the front and the window
+    /// of the tab is told it was activated, so the application shows the
+    /// tab.
+    pub fn activate_tab(window: AppWindowId, tab: AppWindowId) {
+        window.activate();
+        // SAFETY: posting to a window that has since been destroyed fails
+        // without side effects.
+        unsafe {
+            let _ = PostMessageW(
+                Some(tab.hwnd()),
+                WM_ACTIVATE,
+                WPARAM(WA_CLICKACTIVE as usize),
+                LPARAM(0),
+            );
+        }
+    }
+
+    /// Closes the tab `tab`, as the button that closes the picture of a
+    /// tab does: its window is asked to close, and the application closes
+    /// the tab.
+    pub fn close_tab(tab: AppWindowId) {
+        // SAFETY: posting to a window that has since been destroyed fails
+        // without side effects.
+        unsafe {
+            let _ = PostMessageW(Some(tab.hwnd()), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+    }
+
     /// Tells the application of `window` that its button `button` under
     /// the picture was clicked, as the taskbar does.
     pub fn click(window: AppWindowId, button: u32) {
@@ -265,6 +396,47 @@ impl TaskbarList {
             let _ = PostMessageW(Some(window.hwnd()), WM_COMMAND, WPARAM(command), LPARAM(0));
         }
     }
+}
+
+/// Whether the picture or the peek of a tab whose properties are `flags`
+/// is that of the whole window: where `always` is set, or `when_active`
+/// while the tab is `active`.
+fn uses_window(flags: u32, active: bool, (always, when_active): (u32, u32)) -> bool {
+    flags & always != 0 || (active && flags & when_active != 0)
+}
+
+/// The flags of `SetTabProperties` for the picture of a tab, and for its
+/// peek.
+const PICTURE_FLAGS: (u32, u32) = (STPF_USEAPPTHUMBNAILALWAYS, STPF_USEAPPTHUMBNAILWHENACTIVE);
+const PEEK_FLAGS: (u32, u32) = (STPF_USEAPPPEEKALWAYS, STPF_USEAPPPEEKWHENACTIVE);
+
+/// Whether the application of `window` marked it as full screen with
+/// `MarkFullscreenWindow`. Such a window counts as filling its display
+/// when the surfaces look whether to step aside, whatever its frame.
+pub fn marked_fullscreen(window: AppWindowId) -> bool {
+    TaskbarList::read(window, |state| state.fullscreen).unwrap_or(false)
+}
+
+/// Whether `window` is shown, not minimized, on the display `display`.
+pub(super) fn shown_on(window: AppWindowId, display: HMONITOR) -> bool {
+    let hwnd = window.hwnd();
+    // SAFETY: the calls only read the state of the window, and tolerate
+    // one that has gone.
+    unsafe {
+        IsWindowVisible(hwnd).as_bool()
+            && !IsIconic(hwnd).as_bool()
+            && MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) == display
+    }
+}
+
+/// The hidden window that takes the calls, while Tessera is the shell of
+/// the session and the window was made.
+pub(super) fn own_band() -> Option<HWND> {
+    if !SHELL.load(Ordering::Relaxed) {
+        return None;
+    }
+    let band = BAND.load(Ordering::SeqCst);
+    (band != 0).then_some(HWND(band as *mut c_void))
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -526,8 +698,27 @@ enum Call {
         window: isize,
         shared: isize,
     },
-    /// Heard, and nothing to do: activation is told by the shell hook,
-    /// and an image list cannot be read from here.
+    ImageList {
+        window: isize,
+        list: isize,
+    },
+    /// `RegisterTab` and `SetTabActive` name the window of a tab and the
+    /// window it is a tab of, in an order that was not seen.
+    RegisterTab(isize, isize),
+    TabActive(isize, isize),
+    UnregisterTab {
+        tab: isize,
+    },
+    TabOrder {
+        tab: isize,
+        /// The tab it goes before; 0 for the end.
+        before: isize,
+    },
+    TabProperties {
+        tab: isize,
+        flags: u32,
+    },
+    /// Heard, and nothing to do: activation is told by the shell hook.
     Ignored,
 }
 
@@ -537,7 +728,19 @@ impl Call {
     fn of(message: u32, w: usize, l: isize) -> Option<Self> {
         let window = w as isize;
         let call = match message.checked_sub(WM_USER)? {
-            ACTIVATE_TAB | IMAGE_LIST => Self::Ignored,
+            ACTIVATE_TAB => Self::Ignored,
+            IMAGE_LIST => Self::ImageList { window, list: l },
+            REGISTER_TAB => Self::RegisterTab(window, l),
+            TAB_ACTIVE => Self::TabActive(window, l),
+            UNREGISTER_TAB => Self::UnregisterTab { tab: window },
+            TAB_ORDER => Self::TabOrder {
+                tab: window,
+                before: l,
+            },
+            TAB_PROPERTIES => Self::TabProperties {
+                tab: window,
+                flags: l as u32,
+            },
             // This one has the window in `lParam`.
             MARK_FULLSCREEN => Self::Fullscreen {
                 window: l,
@@ -602,11 +805,164 @@ impl Call {
                     if add {
                         state.buttons.clear();
                     }
-                    merge(&mut state.buttons, given, given_icon);
+                    let images = state.images.clone();
+                    merge(&mut state.buttons, given, given_icon, |image| {
+                        images.get(image as usize).cloned()
+                    });
                 });
             }
+            Self::ImageList { window, list } => {
+                let images = image_list(window, list);
+                change(window, |state| {
+                    state.images = images;
+                    let TaskbarState {
+                        images, buttons, ..
+                    } = state;
+                    for button in buttons.iter_mut().filter(|button| button.icon.is_none()) {
+                        let image = button.image.and_then(|image| images.get(image as usize));
+                        button.icon = image.cloned();
+                    }
+                });
+            }
+            Self::RegisterTab(first, second) => {
+                let (tab, window) = tab_and_window(first, second, shown);
+                tabs(|states| register_tab(states, tab, window));
+            }
+            Self::TabActive(first, second) => {
+                let (tab, window) = tab_and_window(first, second, shown);
+                tabs(|states| {
+                    states.entry(window).or_default().active_tab =
+                        (tab != 0).then_some(AppWindowId::from_raw(tab));
+                });
+            }
+            Self::UnregisterTab { tab } => tabs(|states| unregister_tab(states, tab)),
+            Self::TabOrder { tab, before } => tabs(|states| order_tab(states, tab, before)),
+            Self::TabProperties { tab, flags } => change(tab, |state| {
+                state.tab_properties = flags;
+            }),
             Self::Ignored => {}
         }
+    }
+}
+
+/// Whether `window` is shown.
+fn shown(window: isize) -> bool {
+    // SAFETY: the call only reads the state of a window, and tolerates
+    // one that is gone.
+    unsafe { IsWindowVisible(HWND(window as *mut c_void)) }.as_bool()
+}
+
+/// Which of the two windows a call about a tab named is the window of the
+/// tab and which the window it is a tab of, as `shown` tells: the window
+/// of a tab stays hidden, the other is shown. Where both or neither are,
+/// the order of the call is taken: the tab first.
+fn tab_and_window(first: isize, second: isize, shown: impl Fn(isize) -> bool) -> (isize, isize) {
+    match (shown(first), shown(second)) {
+        (true, false) => (second, first),
+        _ => (first, second),
+    }
+}
+
+/// Changes the tabs of the windows with `change`, and tells of it.
+fn tabs(change: impl FnOnce(&mut HashMap<isize, TaskbarState>)) {
+    let mut states = locked(&STATES);
+    change(states.get_or_insert_with(HashMap::new));
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Makes `tab` the last tab of `window`, and no tab of another window.
+fn register_tab(states: &mut HashMap<isize, TaskbarState>, tab: isize, window: isize) {
+    if tab == 0 || window == 0 {
+        return;
+    }
+    unregister_tab(states, tab);
+    let state = states.entry(window).or_default();
+    state.tabs.push(AppWindowId::from_raw(tab));
+}
+
+/// Takes `tab` out of the tabs of every window.
+fn unregister_tab(states: &mut HashMap<isize, TaskbarState>, tab: isize) {
+    let tab = AppWindowId::from_raw(tab);
+    for state in states.values_mut() {
+        state.tabs.retain(|other| *other != tab);
+        if state.active_tab == Some(tab) {
+            state.active_tab = None;
+        }
+    }
+}
+
+/// Moves `tab` before the tab `before` of the same window, or to the end
+/// with `before` 0 or a window that is no tab of it.
+fn order_tab(states: &mut HashMap<isize, TaskbarState>, tab: isize, before: isize) {
+    let tab = AppWindowId::from_raw(tab);
+    let Some(state) = states.values_mut().find(|state| state.tabs.contains(&tab)) else {
+        return;
+    };
+    state.tabs.retain(|other| *other != tab);
+    let before = AppWindowId::from_raw(before);
+    let at = { state.tabs.iter() }
+        .position(|other| *other == before)
+        .unwrap_or(state.tabs.len());
+    state.tabs.insert(at, tab);
+}
+
+/// The images of the image list `ThumbBarSetImageList` handed over in
+/// `list` for `window`: the image list it names in memory shared with the
+/// shell, or else the one icon it names. What was found is reported once
+/// for each window, as it was not seen on a machine.
+fn image_list(window: isize, list: isize) -> Vec<GivenIcon> {
+    let shared = with_shared(list, window, read_image_list).unwrap_or_default();
+    let (images, found) = match shared.is_empty() {
+        false => (shared, "an image list in shared memory"),
+        true => match given_icon(list) {
+            Some(icon) => (vec![icon], "an icon"),
+            None => (Vec::new(), "nothing that can be read here"),
+        },
+    };
+    static REPORTED: Mutex<Option<HashSet<isize>>> = Mutex::new(None);
+    if locked(&REPORTED).get_or_insert_default().insert(window) {
+        report!(
+            "an application gave the buttons under its picture the image list {list:#x}, \
+             read as {found} with {} images",
+            images.len()
+        );
+    }
+    images
+}
+
+/// The images of the image list `bytes` holds as `ImageList_Write` writes
+/// one; empty where they do not hold one.
+fn read_image_list(bytes: &[u8]) -> Vec<GivenIcon> {
+    if !bytes.starts_with(IMAGE_LIST_SIGNATURE) {
+        return Vec::new();
+    }
+    // SAFETY: the stream copies the bytes; the image list read from it and
+    // each icon taken from it are destroyed before returning.
+    unsafe {
+        let Some(stream) = SHCreateMemStream(Some(bytes)) else {
+            return Vec::new();
+        };
+        let list = ImageList_Read(&stream);
+        if list.is_invalid() {
+            return Vec::new();
+        }
+        let count = ImageList_GetImageCount(list).clamp(0, MOST_IMAGES);
+        let images = (0..count)
+            .filter_map(|index| {
+                let icon = ImageList_GetIcon(list, index, ILD_NORMAL);
+                if icon.is_invalid() {
+                    return None;
+                }
+                let pixels = IconPixels::of_icon(icon);
+                let _ = DestroyIcon(icon);
+                Some(GivenIcon {
+                    pixels: Arc::new(pixels?),
+                    stamp: GENERATION.fetch_add(1, Ordering::Relaxed) + 1,
+                })
+            })
+            .collect();
+        let _ = ImageList_Destroy(Some(list));
+        images
     }
 }
 
@@ -783,6 +1139,8 @@ fn rect_of(bytes: &[u8]) -> Option<ScreenRect> {
 struct GivenButton {
     mask: u32,
     id: u32,
+    /// The image of the image list it shows.
+    bitmap: u32,
     icon: isize,
     tip: String,
     flags: u32,
@@ -815,6 +1173,7 @@ fn buttons_of(bytes: &[u8], wide: bool) -> Vec<GivenButton> {
         Some(GivenButton {
             mask: u32_at(one, 0)?,
             id: u32_at(one, 4)?,
+            bitmap: u32_at(one, 8)?,
             icon,
             tip: text_of(one.get(tip_at..tip_at + TIP_LENGTH * 2)?).unwrap_or_default(),
             flags: u32_at(one, flags_at)?,
@@ -824,11 +1183,13 @@ fn buttons_of(bytes: &[u8], wide: bool) -> Vec<GivenButton> {
 }
 
 /// Takes `given` into `buttons`: a button not there yet is added, and of
-/// one that is, what its mask names changes. `icon_of` reads an icon.
+/// one that is, what its mask names changes. `icon_of` reads an icon, and
+/// `image_of` gives an image of the image list, where it was read.
 fn merge<I>(
     buttons: &mut Vec<ThumbButtonOf<I>>,
     given: Vec<GivenButton>,
     icon_of: impl Fn(isize) -> Option<I>,
+    image_of: impl Fn(u32) -> Option<I>,
 ) {
     for given in given {
         let index = match buttons.iter().position(|button| button.id == given.id) {
@@ -841,8 +1202,10 @@ fn merge<I>(
         let button = &mut buttons[index];
         if given.mask & THB_ICON != 0 {
             button.icon = icon_of(given.icon);
+            button.image = None;
         } else if given.mask & THB_BITMAP != 0 {
-            button.icon = None;
+            button.icon = image_of(given.bitmap);
+            button.image = Some(given.bitmap);
         }
         if given.mask & THB_TOOLTIP != 0 {
             button.tip = given.tip;
@@ -864,6 +1227,9 @@ pub struct ThumbButtonOf<I> {
     /// What the application is told on a click.
     pub id: u32,
     pub icon: Option<I>,
+    /// The image of the image list it shows, where it shows one; its icon
+    /// is that image once the image list was read.
+    pub image: Option<u32>,
     pub tip: String,
     pub enabled: bool,
     /// The preview closes after a click.
@@ -880,6 +1246,7 @@ impl<I> ThumbButtonOf<I> {
         Self {
             id,
             icon: None,
+            image: None,
             tip: String::new(),
             enabled: true,
             dismiss: false,
@@ -1007,15 +1374,18 @@ mod tests {
         let given = |mask, id, icon, tip: &str, flags| GivenButton {
             mask,
             id,
+            bitmap: 0,
             icon,
             tip: tip.to_owned(),
             flags,
         };
         let icon_of = |icon: isize| (icon != 0).then_some(icon);
+        let no_image = |_: u32| None;
         merge(
             &mut buttons,
             vec![given(0xF, 1, 5, "Play", 0), given(0xF, 2, 6, "Next", 0)],
             icon_of,
+            no_image,
         );
         merge(
             &mut buttons,
@@ -1027,6 +1397,7 @@ mod tests {
                 THBF_DISMISSONCLICK,
             )],
             icon_of,
+            no_image,
         );
         assert_eq!(buttons.len(), 2);
         assert_eq!(buttons[0].icon, Some(5));
@@ -1036,9 +1407,109 @@ mod tests {
             &mut buttons,
             vec![given(THB_FLAGS, 2, 0, "", THBF_HIDDEN)],
             icon_of,
+            no_image,
         );
         assert!(buttons[1].hidden);
         assert_eq!(buttons[1].tip, "Next");
+    }
+
+    #[test]
+    fn a_button_of_the_image_list_shows_its_image_once_there_is_one() {
+        let mut buttons: Vec<ThumbButtonOf<u32>> = Vec::new();
+        let given = GivenButton {
+            mask: THB_BITMAP | THB_TOOLTIP,
+            id: 4,
+            bitmap: 2,
+            icon: 0,
+            tip: "Shuffle".to_owned(),
+            flags: 0,
+        };
+        merge(&mut buttons, vec![given.clone()], |_| None, |_| None);
+        assert_eq!((buttons[0].icon, buttons[0].image), (None, Some(2)));
+        merge(
+            &mut buttons,
+            vec![given],
+            |_| None,
+            |image| Some(image + 100),
+        );
+        assert_eq!(buttons[0].icon, Some(102));
+        let icon = GivenButton {
+            mask: THB_ICON,
+            id: 4,
+            bitmap: 0,
+            icon: 9,
+            tip: String::new(),
+            flags: 0,
+        };
+        merge(&mut buttons, vec![icon], |icon| Some(icon as u32), |_| None);
+        assert_eq!((buttons[0].icon, buttons[0].image), (Some(9), None));
+        assert!(read_image_list(b"BM\0\0").is_empty());
+    }
+
+    #[test]
+    fn tabs_are_kept_with_their_window_in_their_order() {
+        assert_eq!(
+            Call::of(WM_USER + 67, 0x20, 0x10),
+            Some(Call::RegisterTab(0x20, 0x10))
+        );
+        assert_eq!(
+            Call::of(WM_USER + 71, 0x21, 0),
+            Some(Call::TabOrder {
+                tab: 0x21,
+                before: 0
+            })
+        );
+        assert_eq!(
+            Call::of(WM_USER + 87, 0x21, 3),
+            Some(Call::TabProperties {
+                tab: 0x21,
+                flags: 3
+            })
+        );
+        // The window that is shown is the one the tab belongs to.
+        let shown = |window: isize| window == 0x10;
+        assert_eq!(tab_and_window(0x10, 0x20, shown), (0x20, 0x10));
+        assert_eq!(tab_and_window(0x20, 0x10, shown), (0x20, 0x10));
+        assert_eq!(tab_and_window(0x30, 0x40, shown), (0x30, 0x40));
+
+        let id = AppWindowId::from_raw;
+        let mut states: HashMap<isize, TaskbarState> = HashMap::new();
+        for tab in [0x20, 0x21, 0x22] {
+            register_tab(&mut states, tab, 0x10);
+        }
+        order_tab(&mut states, 0x22, 0x20);
+        assert_eq!(states[&0x10].tabs, [id(0x22), id(0x20), id(0x21)]);
+        order_tab(&mut states, 0x22, 0);
+        assert_eq!(states[&0x10].tabs, [id(0x20), id(0x21), id(0x22)]);
+        // A tab registered for another window leaves the first one.
+        register_tab(&mut states, 0x21, 0x11);
+        states.get_mut(&0x10).unwrap().active_tab = Some(id(0x22));
+        unregister_tab(&mut states, 0x22);
+        assert_eq!(states[&0x10].tabs, [id(0x20)]);
+        assert_eq!(states[&0x10].active_tab, None);
+        assert_eq!(states[&0x11].tabs, [id(0x21)]);
+    }
+
+    #[test]
+    fn a_tab_shows_the_whole_window_where_its_properties_say() {
+        assert!(!uses_window(0, true, PICTURE_FLAGS));
+        assert!(uses_window(
+            STPF_USEAPPTHUMBNAILALWAYS,
+            false,
+            PICTURE_FLAGS
+        ));
+        assert!(!uses_window(
+            STPF_USEAPPTHUMBNAILWHENACTIVE,
+            false,
+            PICTURE_FLAGS
+        ));
+        assert!(uses_window(
+            STPF_USEAPPTHUMBNAILWHENACTIVE,
+            true,
+            PICTURE_FLAGS
+        ));
+        assert!(!uses_window(STPF_USEAPPTHUMBNAILALWAYS, true, PEEK_FLAGS));
+        assert!(uses_window(STPF_USEAPPPEEKWHENACTIVE, true, PEEK_FLAGS));
     }
 
     #[test]
