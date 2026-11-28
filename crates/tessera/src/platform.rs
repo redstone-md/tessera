@@ -32,9 +32,15 @@ pub use win32::TileBorder;
 pub use win32::TrayCommand;
 pub use win32::TrayPromotion;
 pub use win32::UriScheme;
+pub use win32::WindowTab;
 pub use win32::decode_with_wic;
 pub use win32::display_at;
 pub use win32::font_families;
+#[allow(
+    unused_imports,
+    reason = "for what steps aside for a window marked as full screen"
+)]
+pub use win32::marked_fullscreen;
 pub use win32::on_resizing_border;
 pub use win32::paint_desktop;
 pub use win32::rename_new;

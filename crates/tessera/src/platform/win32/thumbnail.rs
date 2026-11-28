@@ -6,8 +6,8 @@
 use anyhow::{Context as _, Result};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Dwm::{
-    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION, DWM_TNP_VISIBLE,
-    DwmQueryThumbnailSourceSize, DwmRegisterThumbnail, DwmUnregisterThumbnail,
+    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION, DWM_TNP_RECTSOURCE,
+    DWM_TNP_VISIBLE, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail, DwmUnregisterThumbnail,
     DwmUpdateThumbnailProperties,
 };
 
@@ -44,8 +44,26 @@ impl Thumbnail {
     /// Draws the picture into `area`, in physical pixels from the top left
     /// corner of the surface, as opaque as `opacity`, from 0 to 1.
     pub fn place(&self, area: ScreenRect, opacity: f32) {
+        self.place_part(area, None, opacity);
+    }
+
+    /// Draws `source`, a part of the pictured window in its own physical
+    /// pixels, or all of it, into `area`, as [`Self::place`] does; the part
+    /// an application asked its picture to show with `SetThumbnailClip`.
+    pub fn place_part(&self, area: ScreenRect, source: Option<ScreenRect>, opacity: f32) {
+        let mut flags = DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY | DWM_TNP_VISIBLE;
+        if source.is_some() {
+            flags |= DWM_TNP_RECTSOURCE;
+        }
+        let source = source.unwrap_or(area);
         let properties = DWM_THUMBNAIL_PROPERTIES {
-            dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY | DWM_TNP_VISIBLE,
+            dwFlags: flags,
+            rcSource: RECT {
+                left: source.left,
+                top: source.top,
+                right: source.right,
+                bottom: source.bottom,
+            },
             rcDestination: RECT {
                 left: area.left,
                 top: area.top,
