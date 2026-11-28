@@ -182,6 +182,8 @@ impl Shell {
         crate::taskview::TaskView::start(cx);
         Files::configure(&config.files, cx);
         config.file_view.configure(cx);
+        crate::terminal::Terminals::configure(&config.terminal, cx);
+        crate::files::WindowsRestore::start(&config.files, cx);
         Startup::start(&config.startup, cx);
         Snapper::start(&config.snap, config.windows_keys, &config.keys, cx);
         Rules::use_templates(&config.rule_templates, cx);
@@ -457,6 +459,8 @@ impl Shell {
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
         config.file_view.configure(cx);
+        crate::terminal::Terminals::configure(&config.terminal, cx);
+        crate::files::WindowsRestore::configure(&config.files, cx);
         Startup::configure(&config.startup, cx);
         Snapper::configure(&config.snap, config.windows_keys, &config.keys, cx);
         Rules::use_templates(&config.rule_templates, cx);

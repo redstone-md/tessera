@@ -3707,6 +3707,67 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Compressing {}", "Сжатие {}"),
     ("The archive was not extracted", "Архив не извлечён"),
     ("The archive was not made", "Архив не создан"),
+    // files-terminal: the terminal, the drop-down terminal and folder windows restored.
+    ("The shell did not start: {}", "Оболочка не запустилась: {}"),
+    ("[exited {}]", "[завершено {}]"),
+    (
+        "Press any key to start the shell again.",
+        "Нажмите любую клавишу, чтобы снова запустить оболочку.",
+    ),
+    ("Shell", "Оболочка"),
+    (
+        "pwsh, powershell, cmd, wsl, wsl:<distribution> or a command line; PowerShell 7 where it is installed, else Windows PowerShell, while it is not set.",
+        "pwsh, powershell, cmd, wsl, wsl:<дистрибутив> или командная строка; пока не задано — PowerShell 7, если он установлен, иначе Windows PowerShell.",
+    ),
+    ("Font size", "Размер шрифта"),
+    ("Line height", "Высота строки"),
+    ("Lines kept", "Хранимые строки"),
+    (
+        "Lines that scrolled out of sight and can be scrolled back to.",
+        "Строки, ушедшие из виду, к которым можно прокрутить назад.",
+    ),
+    (
+        "The 16 named colors, #rrggbb, from black to bright white; the theme gives those not set.",
+        "16 именованных цветов, #rrggbb, от чёрного до ярко-белого; незаданные берутся из темы.",
+    ),
+    ("Cursor", "Курсор"),
+    ("Block", "Блок"),
+    ("Underline", "Подчёркивание"),
+    ("Beam", "Вертикальная черта"),
+    ("Block, not blinking", "Блок, без мигания"),
+    ("Underline, not blinking", "Подчёркивание, без мигания"),
+    ("Beam, not blinking", "Вертикальная черта, без мигания"),
+    ("Copy what is selected", "Копировать выделенное"),
+    ("The pane follows the shell", "Панель следует за оболочкой"),
+    (
+        "The pane of the file manager goes to the folder the shell of the terminal under it reports.",
+        "Панель файлового менеджера переходит в папку, о которой сообщает оболочка терминала под ней.",
+    ),
+    ("Drop-down terminal", "Выпадающий терминал"),
+    (
+        "A share of the width of the display.",
+        "Доля ширины экрана.",
+    ),
+    (
+        "A share of the height of the display.",
+        "Доля высоты экрана.",
+    ),
+    (
+        "Hide when another window takes the keys",
+        "Скрывать, когда клавиатура уходит к другому окну",
+    ),
+    (
+        "Open the folder windows again at the next start",
+        "Снова открывать окна папок при следующем запуске",
+    ),
+    (
+        "Where its shell starts; the folder of the user while it is not set.",
+        "Где запускается его оболочка; пока не задано — папка пользователя.",
+    ),
+    (
+        "Show or hide the drop-down terminal",
+        "Показать или скрыть выпадающий терминал",
+    ),
 ];
 
 #[cfg(test)]

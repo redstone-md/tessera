@@ -166,3 +166,7 @@ pub use win32::{explorer_running, shell_mode};
 pub use win32::{scheme_handler, windows_taskbar_pins};
 pub use win32::{open_folder_options, set_extensions_shown, show_properties_of};
 pub use win32::{terminal, windows_terminal};
+// files-terminal: the console of the terminal, and windows under the pointer.
+pub use win32::{
+    Console, ConsoleSize, ConsoleStart, ConsoleWriter, client_origin, root_window_at, shell_is_idle,
+};

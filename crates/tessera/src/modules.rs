@@ -51,6 +51,7 @@ mod spacer;
 mod start;
 mod startup;
 pub mod system;
+mod terminal;
 mod tiling;
 mod tiling_overrides;
 mod trash;
@@ -151,6 +152,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(power_settings::PowerSettingsModule),
         Box::new(night::NightModule),
         Box::new(crate::peek::PeekModule),
+        Box::new(terminal::TerminalModule),
         Box::new(ExtensionsModule {
             settings: config.extensions.clone(),
         }),

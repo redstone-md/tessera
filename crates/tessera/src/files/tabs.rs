@@ -165,6 +165,15 @@ impl<P> Tabs<P> {
         at
     }
 
+    /// Puts `tab` at the place `at` (after the last where it is beyond
+    /// them) and in front; says where it went.
+    pub fn insert(&mut self, at: usize, tab: Tab<P>) -> usize {
+        let at = at.min(self.tabs.len());
+        self.tabs.insert(at, tab);
+        self.active = at;
+        at
+    }
+
     /// Takes away the tab `index` and gives it, unless it is the last,
     /// which a window cannot lose: closing it closes the window. The tab
     /// to its right comes in front where it was in front, else the one
@@ -254,6 +263,16 @@ mod tests {
         tabs.open(Tab::single("d"), true);
         assert_eq!(order(&tabs), ["a", "c", "d", "b"]);
         assert_eq!(tabs.active_index(), 1);
+    }
+
+    #[test]
+    fn a_tab_brought_from_another_window_goes_where_it_was_dropped() {
+        let mut tabs = tabs(&["a", "b"]);
+        assert_eq!(tabs.insert(1, Tab::single("c")), 1);
+        assert_eq!(order(&tabs), ["a", "c", "b"]);
+        assert_eq!(tabs.active_index(), 1);
+        assert_eq!(tabs.insert(9, Tab::single("d")), 3);
+        assert_eq!(order(&tabs), ["a", "c", "b", "d"]);
     }
 
     #[test]
