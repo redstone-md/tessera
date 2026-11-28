@@ -28,6 +28,7 @@ mod display_names;
 mod drag;
 mod drop_target;
 mod execute;
+mod explorer_commands;
 mod explorer_view;
 mod file_jobs;
 mod file_op;
@@ -152,6 +153,7 @@ pub use drag::DragOut;
 pub use drop_target::{DropEvent, DropTarget, DropZone, DropZones};
 pub use execute::Process;
 pub use execute::{Launch, Show};
+pub use explorer_commands::{ExplorerCommand, ExplorerCommands};
 pub use explorer_view::{
     Attributes, ExplorerSettings, NameRules, localized_candidates, shell_names,
 };

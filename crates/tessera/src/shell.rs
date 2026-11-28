@@ -146,6 +146,7 @@ impl Shell {
         Workspaces::start(&config.workspaces, cx);
         crate::performance::Performance::start(&config.performance, cx);
         crate::modules::system::Meters::configure(&config.system, cx);
+        crate::platform::ExplorerCommands::prepare();
         let extensions = installed_stamp();
         let modules = modules::builtin(&config);
         Actions::start(&modules, cx);

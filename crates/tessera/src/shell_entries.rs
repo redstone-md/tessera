@@ -25,11 +25,11 @@ use crate::banners::{Banners, Notice};
 use crate::file_actions::archive::{self, ArchiveEnd, ArchiveFormat, ArchiveJob};
 use crate::file_actions::{self, Chosen, FileAction};
 use crate::i18n::Language;
-use crate::icons::Icon;
+use crate::icons::{Icon, icon_of_pixels};
 use crate::menu::{MenuEntry, Menus};
 use crate::platform::{
-    FileOperation, Intercept, Launch, MenuOutcome, NewTemplate, OpenWithHandler, SendToTarget,
-    ShellMenu, ShellVerb, choose_app, unique_name,
+    ExplorerCommand, ExplorerCommands, FileOperation, Intercept, Launch, MenuOutcome, NewTemplate,
+    OpenWithHandler, SendToTarget, ShellMenu, ShellVerb, choose_app, unique_name,
 };
 use crate::popup::PopupAnchor;
 use crate::runners::fill;
@@ -172,6 +172,8 @@ struct Own {
     background: bool,
     /// The `[[file_action]]` entries they fit, with their icons.
     actions: Vec<(FileAction, Icon)>,
+    /// The entries packaged applications add (`IExplorerCommand`).
+    commands: Vec<ExplorerCommand>,
 }
 
 impl Own {
@@ -201,6 +203,7 @@ impl Own {
             chosen,
             background,
             actions,
+            commands: Vec::new(),
         }
     }
 }
@@ -228,15 +231,21 @@ impl ShellChoices {
                 return choices;
             };
             let own = Self::read_own(vec![folder.clone()], true, actions, cx);
+            let commands = { folder.is_absolute() }
+                .then(|| ExplorerCommands::for_items(vec![folder.clone()], true));
             let built = ShellMenu::for_background(folder, extended);
             let templates = { cx.background_executor() }.spawn(async { NewTemplate::all() });
             choices.menu = within(built, until, cx).await.and_then(shell_menu);
             choices.templates = templates.await;
             choices.own = within(own, until + OWN_GRACE, cx).await.unwrap_or_default();
+            if let Some(commands) = commands {
+                choices.own.commands = within(commands, until, cx).await.unwrap_or_default();
+            }
             return choices;
         }
         let files = chosen.iter().all(|path| path.is_absolute());
         let own = Self::read_own(chosen.clone(), false, actions, cx);
+        let commands = files.then(|| ExplorerCommands::for_items(chosen.clone(), false));
         let built = ShellMenu::for_items(chosen, extended);
         let handlers = open_with.as_deref().map(OpenWithHandler::of);
         let send_to = files.then(SendToTarget::all);
@@ -248,6 +257,9 @@ impl ShellChoices {
             choices.send_to = within(send_to, until, cx).await.unwrap_or_default();
         }
         choices.own = within(own, until + OWN_GRACE, cx).await.unwrap_or_default();
+        if let Some(commands) = commands {
+            choices.own.commands = within(commands, until, cx).await.unwrap_or_default();
+        }
         choices
     }
 
@@ -542,6 +554,7 @@ impl<H: FileMenu> MenuTarget<H> {
     /// phone), which keeps the Shell's own verbs.
     fn own_entries(&self, own: Own, language: Language) -> Vec<MenuEntry> {
         let mut entries = self.action_entries(&own, language);
+        entries.extend(self.command_entries(&own.commands, &own.paths()));
         if own.background || !own.has_paths() {
             return entries;
         }
@@ -571,6 +584,26 @@ impl<H: FileMenu> MenuTarget<H> {
             },
         ));
         entries
+    }
+
+    /// The entries of the commands of packaged applications, those with
+    /// subcommands as submenus; a click invokes the command for `paths`.
+    fn command_entries(&self, commands: &[ExplorerCommand], paths: &[PathBuf]) -> Vec<MenuEntry> {
+        { commands.iter() }
+            .map(|command| {
+                let picture = command.icon.as_ref().and_then(icon_of_pixels);
+                if !command.children.is_empty() {
+                    let children = self.command_entries(&command.children, paths);
+                    return submenu(ICON_VERB, &command.title, children, self.anchor)
+                        .with_picture(picture);
+                }
+                let (path, paths) = (command.path.clone(), paths.to_vec());
+                MenuEntry::new(ICON_VERB, command.title.clone(), move |_| {
+                    ExplorerCommands::invoke(paths.clone(), path.clone())
+                })
+                .with_picture(picture)
+            })
+            .collect()
     }
 
     /// "Open as administrator", for one program, installer or batch file.

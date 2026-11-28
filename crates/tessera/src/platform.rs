@@ -90,6 +90,7 @@ pub use win32::{DisplayOutput, DisplaySetup, Rotation, VideoMode, hertz_text};
 pub use win32::{DragOut, DropEvent, DropTarget, DropZone, DropZones};
 pub use win32::{DriveDialog, NetworkDrives, SharePackage, reveal, reveal_with};
 pub use win32::{EdgeBand, EdgeSpan, HidingClaim};
+pub use win32::{ExplorerCommand, ExplorerCommands};
 pub use win32::{
     ExplorerShell, NextShell, SHELL_FLAG, ShellRegistration, attach_console, is_safe_mode,
     own_program_name, recovery_keys_held, started_as_shell,
