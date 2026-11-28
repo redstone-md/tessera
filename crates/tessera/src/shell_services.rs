@@ -20,9 +20,12 @@
 //! is the shell, and this part follows the windows of the file manager for
 //! it.
 
+use std::time::Duration;
+
+use gpui::{App, Global};
 use serde::Deserialize;
 
-use crate::platform::{ShellHost, shell_mode};
+use crate::platform::{ShellHost, ShellServiceObjects, shell_mode};
 
 /// What `[shell_services]` of the configuration says.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -55,17 +58,62 @@ impl Default for ShellServicesConfig {
     }
 }
 
+/// How long quitting waits for the objects of `ShellServiceObjects` to
+/// close.
+const CLOSING_TIME: Duration = Duration::from_millis(1500);
+
+/// The `[shell_services]` in use.
+struct ShellServices(ShellServicesConfig);
+
+impl Global for ShellServices {}
+
 /// Starts the services `config` asks for, once the desktop is ready.
-pub fn start(config: &ShellServicesConfig) {
+pub fn start(config: &ShellServicesConfig, cx: &mut App) {
     ShellHost::record_messages(config.log_messages);
-    if shell_mode() && config.change_server {
+    cx.set_global(ShellServices(config.clone()));
+    if !shell_mode() {
+        return;
+    }
+    if config.change_server {
         report!(
             "the change notifications of the Shell are not served yet: the protocol waits to be confirmed on Windows"
         );
     }
+    if config.service_objects {
+        ShellServiceObjects::start();
+    }
+    // Quitting closes the objects away from the thread of GPUI, which
+    // waits for that at most as long as it waits for any part.
+    cx.on_app_quit(|cx| {
+        let closing = cx
+            .background_executor()
+            .spawn(async { ShellServiceObjects::close(CLOSING_TIME) });
+        async move {
+            if !closing.await {
+                report!("the objects that start with the shell did not close in time");
+            }
+        }
+    })
+    .detach();
 }
 
-/// Applies a new `[shell_services]`.
-pub fn configure(config: &ShellServicesConfig) {
+/// Applies a new `[shell_services]`: a service turned on starts, one
+/// turned off stops.
+pub fn configure(config: &ShellServicesConfig, cx: &mut App) {
     ShellHost::record_messages(config.log_messages);
+    let before = cx
+        .try_global::<ShellServices>()
+        .map(|services| services.0.clone())
+        .unwrap_or_default();
+    cx.set_global(ShellServices(config.clone()));
+    if !shell_mode() {
+        return;
+    }
+    if config.service_objects && !before.service_objects {
+        ShellServiceObjects::start();
+    } else if !config.service_objects && before.service_objects {
+        cx.background_executor()
+            .spawn(async { ShellServiceObjects::close(CLOSING_TIME) })
+            .detach();
+    }
 }

@@ -23,6 +23,7 @@ pub use win32::Process;
 pub use win32::QuickFolder;
 pub use win32::RecycledItem;
 pub use win32::SessionKey;
+pub use win32::ShellServiceObjects;
 pub use win32::ShellThread;
 pub use win32::ShellWindows;
 pub use win32::ShowDesktop;
