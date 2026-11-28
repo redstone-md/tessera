@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::config::config_dir;
-use crate::platform::{AppWindowId, Clip, ClipboardWatch, Launch, Offer, paste_into};
+use crate::platform::{AppWindowId, Clip, ClipboardWatch, Copied, Launch, Offer, Rich, paste_into};
 use crate::popup::Popups;
 
 /// How many items are kept besides the pinned ones at the most.
@@ -58,7 +58,7 @@ const THUMBNAIL: (u32, u32) = (288, 112);
 const AIM_FRESH: Duration = Duration::from_secs(3);
 
 /// What `[clipboard]` of the configuration says.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ClipboardConfig {
     /// Whether what is copied is kept in the history.
@@ -67,6 +67,9 @@ pub struct ClipboardConfig {
     pub size: usize,
     /// Whether pictures are kept.
     pub images: bool,
+    /// Whether the HTML and RTF a program offers beside a text are kept
+    /// with it, so that the text is pasted again with its formatting.
+    pub formats: bool,
 }
 
 impl Default for ClipboardConfig {
@@ -75,6 +78,7 @@ impl Default for ClipboardConfig {
             enabled: true,
             size: 25,
             images: true,
+            formats: false,
         }
     }
 }
@@ -220,6 +224,12 @@ pub struct Entry {
     /// What its row shows of it.
     pub preview: SharedString,
     searched: String,
+    /// The HTML and RTF copied beside a text, where the formats are kept;
+    /// empty otherwise, and for the pins of an earlier run.
+    pub rich: Arc<Rich>,
+    /// The file name of the program it was copied from last, where Windows
+    /// told it.
+    pub source: Option<String>,
 }
 
 /// The items of the history, newest first, and what is done with them;
@@ -254,6 +264,8 @@ impl History {
             content,
             copied,
             pinned: false,
+            rich: Arc::default(),
+            source: None,
         }
     }
 
@@ -278,6 +290,23 @@ impl History {
         let entry = self.entry(key, content, copied);
         self.entries.insert(0, entry);
         self.trim(size)
+    }
+
+    /// Adds what a copy kept as the newest item, as [`Self::add`] does,
+    /// with the rich text and the program it came with.
+    fn add_copy(&mut self, kept: Kept, copied: DateTime<Local>, size: usize) -> Vec<Content> {
+        let Kept {
+            key,
+            content,
+            rich,
+            source,
+        } = kept;
+        let dropped = self.add(key, content, copied, size);
+        if let Some(entry) = self.entries.first_mut() {
+            entry.rich = Arc::new(rich);
+            entry.source = source;
+        }
+        dropped
     }
 
     /// Adds a pinned item of an earlier run where its time puts it, unless
@@ -309,6 +338,16 @@ impl History {
     /// Takes the item `id` out, pinned or not.
     fn remove(&mut self, id: u64) -> Option<Entry> {
         Some(self.entries.remove(self.position(id)?))
+    }
+
+    /// Lets go of the rich text of every item, as when the formats are no
+    /// longer kept.
+    fn forget_rich(&mut self) {
+        for entry in &mut self.entries {
+            if !entry.rich.is_empty() {
+                entry.rich = Arc::default();
+            }
+        }
     }
 
     /// Takes out every item that is not pinned.
@@ -410,22 +449,30 @@ struct Pin {
 struct Kept {
     key: String,
     content: Content,
+    rich: Rich,
+    source: Option<String>,
 }
 
 impl Kept {
     /// What `clip` is kept as: a picture is written to a file of its own
     /// in `pictures` and a small copy is made to show; this takes a while,
     /// and is done away from the user interface.
-    fn of(clip: Clip, pictures: Option<&Path>) -> Result<Self, String> {
+    fn of(copied: Copied, pictures: Option<&Path>) -> Result<Self, String> {
+        let Copied { clip, rich, source } = copied;
+        let (key, content) = Self::content_of(clip, pictures)?;
+        Ok(Self {
+            key,
+            content,
+            rich,
+            source,
+        })
+    }
+
+    /// What tells `clip` apart, and what the history holds of it.
+    fn content_of(clip: Clip, pictures: Option<&Path>) -> Result<(String, Content), String> {
         Ok(match clip {
-            Clip::Text(text) => Self {
-                key: text_key(&text),
-                content: Content::Text(text),
-            },
-            Clip::Files(files) => Self {
-                key: files_key(&files),
-                content: Content::Files(files),
-            },
+            Clip::Text(text) => (text_key(&text), Content::Text(text)),
+            Clip::Files(files) => (files_key(&files), Content::Files(files)),
             Clip::Image(pixels) => {
                 let pictures = pictures.ok_or("there is no directory to keep pictures in")?;
                 let key = image_key(&pixels);
@@ -437,17 +484,26 @@ impl Kept {
                 pixels
                     .save_with_format(&file, ImageFormat::Png)
                     .map_err(|error| failed(&error))?;
-                Self {
-                    key,
-                    content: Content::Image(Picture {
-                        file,
-                        width: pixels.width(),
-                        height: pixels.height(),
-                        thumbnail: thumbnail(&pixels),
-                    }),
-                }
+                let picture = Picture {
+                    file,
+                    width: pixels.width(),
+                    height: pixels.height(),
+                    thumbnail: thumbnail(&pixels),
+                };
+                (key, Content::Image(picture))
             }
         })
+    }
+
+    /// A text kept without rich text or a program, as a pin or an edited
+    /// entry is.
+    fn text(text: String) -> Self {
+        Self {
+            key: text_key(&text),
+            content: Content::Text(text),
+            rich: Rich::default(),
+            source: None,
+        }
     }
 }
 
@@ -556,13 +612,12 @@ fn restore(started: SystemTime) -> Option<Vec<(Kept, DateTime<Local>)>> {
             .single()
             .unwrap_or_else(Local::now);
         let kept = match (pin.text, pin.files, pin.image, &pictures) {
-            (Some(text), None, None, _) => Kept {
-                key: text_key(&text),
-                content: Content::Text(text),
-            },
+            (Some(text), None, None, _) => Kept::text(text),
             (None, Some(files), None, _) => Kept {
                 key: files_key(&files),
                 content: Content::Files(files),
+                rich: Rich::default(),
+                source: None,
             },
             (None, None, Some(name), Some(pictures)) => match restore_picture(pictures, &name) {
                 Ok(kept) => {
@@ -605,6 +660,8 @@ fn restore_picture(pictures: &Path, name: &str) -> Result<Kept, String> {
             height: pixels.height(),
             thumbnail: thumbnail(&pixels),
         }),
+        rich: Rich::default(),
+        source: None,
     })
 }
 
@@ -626,11 +683,13 @@ fn delete_left_pictures(pictures: &Path, kept: &HashSet<String>, started: System
     }
 }
 
-/// What to put on the clipboard for `content`: for a picture its file is
+/// What to put on the clipboard for `content`, with the rich text `rich`
+/// beside a text unless it is to be `plain`: for a picture its file is
 /// read again.
-fn offer_of(content: &Content) -> Result<Offer, String> {
+fn offer_of(content: &Content, rich: &Rich, plain: bool) -> Result<Offer, String> {
     Ok(match content {
-        Content::Text(text) => Offer::text(text),
+        Content::Text(text) if plain => Offer::text(text),
+        Content::Text(text) => Offer::text(text).with_rich(rich),
         Content::Files(files) => Offer::files(files),
         Content::Image(picture) => {
             let failed = |error: &dyn std::fmt::Display| {
@@ -701,7 +760,7 @@ impl ClipHistory {
                 history: History::default(),
                 config: ClipboardConfig {
                     enabled: false,
-                    ..*config
+                    ..config.clone()
                 },
                 watch: None,
                 taking: None,
@@ -719,7 +778,7 @@ impl ClipHistory {
     /// watch and forgets what is not pinned.
     pub fn configure(config: &ClipboardConfig, cx: &mut App) {
         if let Some(history) = Self::shared(cx) {
-            history.update(cx, |this, cx| this.apply(*config, cx));
+            history.update(cx, |this, cx| this.apply(config.clone(), cx));
         }
     }
 
@@ -770,8 +829,9 @@ impl ClipHistory {
             report!("`size` of [clipboard] is from 1 to {MOST_KEPT}, {size} is used");
         }
         let was_on = self.config.enabled;
+        let (enabled, images, formats) = (config.enabled, config.images, config.formats);
         self.config = ClipboardConfig { size, ..config };
-        match (config.enabled, was_on) {
+        match (enabled, was_on) {
             (true, false) => self.watch_clipboard(cx),
             (false, true) => {
                 self.taking = None;
@@ -780,7 +840,11 @@ impl ClipHistory {
             _ => {}
         }
         if let Some(watch) = &self.watch {
-            watch.keep_images(config.images);
+            watch.keep_images(images);
+            watch.keep_formats(formats);
+        }
+        if !formats {
+            self.history.forget_rich();
         }
         let dropped = self.history.trim(size);
         forget(dropped, cx);
@@ -807,6 +871,7 @@ impl ClipHistory {
                 return;
             }
         };
+        watch.keep_formats(self.config.formats);
         self.watch = Some(watch);
         let pictures = pictures_path();
         let taking = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -849,8 +914,7 @@ impl ClipHistory {
             .entries()
             .iter()
             .any(|entry| entry.key == kept.key && entry.pinned);
-        let dropped =
-            { &mut self.history }.add(kept.key, kept.content, Local::now(), self.config.size);
+        let dropped = { &mut self.history }.add_copy(kept, Local::now(), self.config.size);
         forget(dropped, cx);
         if pinned {
             self.save_pins(cx);
@@ -910,7 +974,16 @@ impl ClipHistory {
     /// then pastes it into `target`, if one is given and is still there.
     /// The popup is to be closed by the caller, which gives the keyboard
     /// back to that window.
-    pub fn paste(&mut self, id: u64, target: Option<AppWindowId>, cx: &mut Context<Self>) {
+    ///
+    /// With `plain` a text goes without the HTML and RTF it was copied
+    /// with, so that it takes the formatting of where it is pasted.
+    pub fn paste(
+        &mut self,
+        id: u64,
+        target: Option<AppWindowId>,
+        plain: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(writer) = self.watch.as_ref().map(ClipboardWatch::writer) else {
             return;
         };
@@ -918,6 +991,7 @@ impl ClipHistory {
             return;
         };
         let (content, pinned) = (entry.content.clone(), entry.pinned);
+        let rich = entry.rich.clone();
         self.history.bring_forward(id, Local::now());
         if pinned {
             self.save_pins(cx);
@@ -928,7 +1002,7 @@ impl ClipHistory {
         let started = thread::Builder::new()
             .name("clipboard paste".to_owned())
             .spawn(move || {
-                let put = offer_of(&content).and_then(|offer| {
+                let put = offer_of(&content, &rich, plain).and_then(|offer| {
                     let answer = writer.put(offer).recv_blocking();
                     answer.unwrap_or_else(|_| Err("the clipboard did not answer".to_owned()))
                 });

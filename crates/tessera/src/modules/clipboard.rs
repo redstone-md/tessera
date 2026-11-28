@@ -237,7 +237,7 @@ impl ClipList {
             return;
         };
         let target = self.target;
-        history.update(cx, |history, cx| history.paste(id, target, cx));
+        history.update(cx, |history, cx| history.paste(id, target, false, cx));
         cx.defer(Popups::close);
     }
 

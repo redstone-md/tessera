@@ -1180,3 +1180,13 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Clipboard and screenshots" = "Presse-papiers et captures d'écran"
 "Displays and power" = "Écrans et alimentation"
 "Session" = "Session"
+# spectacle-klipper: screenshots, the clipboard's actions and entries.
+"Clipboard history" = "Historique du presse-papiers"
+"Keep a history of the clipboard" = "Tenir un historique du presse-papiers"
+"What is copied is kept while Tessera runs; off forgets all but the pinned items. Win+V follows it at the next start." = "Ce qui est copié est gardé tant que Tessera tourne ; désactivé oublie tout sauf les éléments épinglés. Win+V suit au prochain démarrage."
+"Items kept" = "Éléments gardés"
+"Besides the pinned ones." = "En plus des éléments épinglés."
+"Keep pictures" = "Garder les images"
+"As PNG files in cache\\clipboard of the configuration directory, while they are in the history." = "En fichiers PNG dans cache\\clipboard du dossier de configuration, tant qu'elles sont dans l'historique."
+"Keep the formatting of texts" = "Garder la mise en forme des textes"
+"The HTML and RTF a program copies beside a text, up to a megabyte each, are kept with it, so that it is pasted again with its formatting." = "Le HTML et le RTF qu'un programme copie avec un texte, jusqu'à un mégaoctet chacun, sont gardés avec lui, pour qu'il soit collé à nouveau avec sa mise en forme."

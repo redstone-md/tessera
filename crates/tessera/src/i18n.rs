@@ -2122,6 +2122,31 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Windows has no setting for a battery charge limit; where the battery has one, the maker's own app sets it.",
         "В Windows нет настройки предела заряда батареи; где он есть, его задаёт приложение производителя.",
     ),
+    // spectacle-klipper: screenshots, the clipboard's actions and entries.
+    ("Clipboard history", "Журнал буфера обмена"),
+    (
+        "Keep a history of the clipboard",
+        "Вести журнал буфера обмена",
+    ),
+    (
+        "What is copied is kept while Tessera runs; off forgets all but the pinned items. Win+V follows it at the next start.",
+        "Скопированное хранится, пока работает Tessera; выключение забывает всё, кроме закреплённого. Win+V следует за этим при следующем запуске.",
+    ),
+    ("Items kept", "Хранимые элементы"),
+    ("Besides the pinned ones.", "Помимо закреплённых."),
+    ("Keep pictures", "Хранить изображения"),
+    (
+        "As PNG files in cache\\clipboard of the configuration directory, while they are in the history.",
+        "Как файлы PNG в cache\\clipboard папки конфигурации, пока они в журнале.",
+    ),
+    (
+        "Keep the formatting of texts",
+        "Сохранять форматирование текста",
+    ),
+    (
+        "The HTML and RTF a program copies beside a text, up to a megabyte each, are kept with it, so that it is pasted again with its formatting.",
+        "HTML и RTF, которые программа копирует вместе с текстом, до мегабайта каждый, хранятся с ним, чтобы он вставлялся снова со своим форматированием.",
+    ),
 ];
 
 #[cfg(test)]

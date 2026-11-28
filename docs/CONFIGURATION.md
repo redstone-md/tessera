@@ -80,6 +80,7 @@ The columns of the details are kept per folder whatever `per_folder` says, in `%
 enabled = true   # keep what is copied; false forgets all but the pinned items
 size = 25        # items kept besides the pinned ones, 1 to 200
 images = true    # keep pictures too, as PNG files in cache\clipboard of the configuration directory
+formats = false  # keep the HTML and RTF copied beside a text, up to 1 MB each, and paste them again with it
 
 [[key]]
 press = "win+v"
@@ -89,6 +90,8 @@ action = "clipboard"   # the popup "clipboard", noting the window in front to pa
 The widget `clipboard` is the list, for a popup, and the popup `clipboard` holds it: 440 by 560 pixels at the middle of the bar, unless a `[[popup]]` of the same name says otherwise (`place = "center"` puts it in the middle of the display). The widget `clipboard-button` is a button of a bar that opens it. In the list the arrows choose an item, Enter or a click puts it back on the clipboard and presses Ctrl+V in the window that was in front, Delete (with nothing written in the search) takes it out, and Esc closes the popup; the buttons of a row pin it, take it out, or open the web address it is. **Clear all** keeps the pinned items. Pinned items are written to `clipboard.toml` in the configuration directory, which Tessera rewrites; the pictures among them stay in `cache\clipboard`. A `clipboard.toml` that cannot be read is reported and left as it is, and pins made then are not written until Tessera starts again, so that it can be mended without losing them.
 
 Where `windows_keys` binds the keys of Windows, Win+V is bound to `clipboard` only when `enabled` was true as Tessera started; with `enabled = false` it stays with the history of Windows. A change of `enabled` moves Win+V at the next start. A `[[key]]` that names the action, as above, takes Win+V either way.
+
+With `formats = true` the `HTML Format` and `Rich Text Format` a program copies beside a text are kept with it, each where it is no larger than a megabyte, and go back on the clipboard with the text when it is pasted, so that a word processor or a mail program pastes it with its formatting; they are kept in memory only, not in `clipboard.toml`, so a pinned text comes back after a restart as plain text. Turning `formats` off lets go of those kept so far. The settings show these four keys in the card **Clipboard history** of the section **Clipboard and screenshots**.
 ## The window switcher
 
 The window switcher opens for a `[[key]]` with `switch = "next"` or `"previous"`, or one with `action = "switcher"`, and `[switcher]` sets how it looks and which windows it offers:

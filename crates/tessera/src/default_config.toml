@@ -450,10 +450,15 @@
 #   size     how many items are kept besides the pinned ones (25, 1 to 200)
 #   images   whether pictures are kept (true); each is a PNG file in
 #            cache/clipboard of this directory until it leaves the history
+#   formats  whether the HTML and RTF a program copies beside a text are
+#            kept with it, up to a megabyte each, so that the text is
+#            pasted again with its formatting (false); without them, or
+#            with Paste as plain text, it is pasted as plain text
 # [clipboard]
 # enabled = true
 # size = 25
 # images = true
+# formats = false
 
 # The notices Tessera gives where Explorer would, listed with the
 # notifications and shown as banners where [notifications] shows banners

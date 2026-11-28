@@ -68,6 +68,7 @@ pub use win32::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLight};
 pub use win32::{Capability, CapabilityUse, PrivacyWatch};
 pub use win32::{Clip, ClipboardWatch, Offer, paste_into};
 pub use win32::{CloudState, Overlays};
+pub use win32::{Copied, Rich};
 pub use win32::{
     DesktopFolders, DesktopLayer, ExplorerIcons, FolderWatch, LayerKind, VirtualKind, layer_frame,
     virtual_items,

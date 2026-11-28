@@ -133,6 +133,7 @@ pub use bluetooth::{BluetoothScan, FoundDevice, Pairing, PairingFailure, Pairing
 pub use brightness::BrightnessLevel;
 pub use brightness::ScreenBrightness;
 pub use clipboard_watch::{Clip, ClipboardWatch, Offer, paste_into};
+pub use clipboard_watch::{Copied, Rich};
 pub use commands::Commands;
 pub use connections::{Carrier, Connection, Vpn, VpnState, Wireless};
 pub use desktop_folder::DesktopOptions;

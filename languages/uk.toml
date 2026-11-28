@@ -1180,3 +1180,13 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Clipboard and screenshots" = "Буфер обміну та знімки екрана"
 "Displays and power" = "Дисплеї та живлення"
 "Session" = "Сеанс"
+# spectacle-klipper: screenshots, the clipboard's actions and entries.
+"Clipboard history" = "Журнал буфера обміну"
+"Keep a history of the clipboard" = "Вести журнал буфера обміну"
+"What is copied is kept while Tessera runs; off forgets all but the pinned items. Win+V follows it at the next start." = "Скопійоване зберігається, поки працює Tessera; вимкнення забуває все, крім закріпленого. Win+V слідує за цим під час наступного запуску."
+"Items kept" = "Збережені елементи"
+"Besides the pinned ones." = "Окрім закріплених."
+"Keep pictures" = "Зберігати зображення"
+"As PNG files in cache\\clipboard of the configuration directory, while they are in the history." = "Як файли PNG у cache\\clipboard теки конфігурації, поки вони в журналі."
+"Keep the formatting of texts" = "Зберігати форматування тексту"
+"The HTML and RTF a program copies beside a text, up to a megabyte each, are kept with it, so that it is pasted again with its formatting." = "HTML і RTF, які програма копіює разом із текстом, до мегабайта кожен, зберігаються з ним, щоб він вставлявся знову зі своїм форматуванням."
