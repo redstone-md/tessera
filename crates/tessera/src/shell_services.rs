@@ -25,7 +25,8 @@ use std::time::Duration;
 use gpui::{App, Global};
 use serde::Deserialize;
 
-use crate::platform::{ShellHost, ShellServiceObjects, shell_mode};
+use crate::files::Files;
+use crate::platform::{Launch, ProgmanDde, ShellHost, ShellServiceObjects, shell_mode};
 
 /// What `[shell_services]` of the configuration says.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -82,6 +83,10 @@ pub fn start(config: &ShellServicesConfig, cx: &mut App) {
     if config.service_objects {
         ShellServiceObjects::start();
     }
+    if config.dde {
+        ProgmanDde::start();
+    }
+    show_program_groups(cx);
     // Quitting closes the objects away from the thread of GPUI, which
     // waits for that at most as long as it waits for any part.
     cx.on_app_quit(|cx| {
@@ -109,6 +114,11 @@ pub fn configure(config: &ShellServicesConfig, cx: &mut App) {
     if !shell_mode() {
         return;
     }
+    match (config.dde, before.dde) {
+        (true, false) => ProgmanDde::start(),
+        (false, true) => ProgmanDde::stop(),
+        _ => {}
+    }
     if config.service_objects && !before.service_objects {
         ShellServiceObjects::start();
     } else if !config.service_objects && before.service_objects {
@@ -116,4 +126,24 @@ pub fn configure(config: &ShellServicesConfig, cx: &mut App) {
             .spawn(async { ShellServiceObjects::close(CLOSING_TIME) })
             .detach();
     }
+}
+
+/// Shows the folders the program manager's commands ask for, as
+/// `ShowGroup` does after an installer made a group: in the file manager
+/// where it takes folders, and through the Shell otherwise.
+fn show_program_groups(cx: &mut App) {
+    let folders = ProgmanDde::folders();
+    cx.spawn(async move |cx| {
+        while let Ok(folder) = folders.recv().await {
+            let shown = cx.update(|cx| {
+                if !Files::open_folder(&folder, cx) {
+                    Launch::new(&folder).start();
+                }
+            });
+            if shown.is_err() {
+                break;
+            }
+        }
+    })
+    .detach();
 }
