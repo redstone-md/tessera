@@ -337,35 +337,37 @@ pub(super) fn groups_text(groups: &[String]) -> String {
 /// The program manager's DDE, served by Tessera.
 pub struct ProgmanDde;
 
-/// The thread of the server while it runs, by its number.
+/// The thread of the server while it runs, by its number; [`STARTING`]
+/// while it starts, zero where none runs.
 static THREAD: AtomicU32 = AtomicU32::new(0);
+const STARTING: u32 = u32::MAX;
 /// Where the folders to show go.
 static FOLDERS: OnceLock<(Sender<PathBuf>, Receiver<PathBuf>)> = OnceLock::new();
 
 impl ProgmanDde {
-    /// Starts the server on a thread of its own, where it does not run.
+    /// Starts the server on a thread of its own, where it does not run,
+    /// and returns at once.
     pub fn start() {
-        if THREAD.load(Ordering::SeqCst) != 0 {
+        if THREAD
+            .compare_exchange(0, STARTING, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             return;
         }
-        let (ready, thread) = std::sync::mpsc::sync_channel(1);
         let started = thread::Builder::new()
             .name("progman dde".to_owned())
-            .spawn(move || serve(ready));
-        match started {
-            Ok(_) => {
-                if let Ok(thread) = thread.recv_timeout(std::time::Duration::from_secs(2)) {
-                    THREAD.store(thread, Ordering::SeqCst);
-                }
-            }
-            Err(error) => report!("old installers find no program manager: {error}"),
+            .spawn(serve);
+        if let Err(error) = started {
+            THREAD.store(0, Ordering::SeqCst);
+            report!("old installers find no program manager: {error}");
         }
     }
 
-    /// Stops the server, where it runs.
+    /// Stops the server, where it runs; one still starting stops once it
+    /// has started.
     pub fn stop() {
         let thread = THREAD.swap(0, Ordering::SeqCst);
-        if thread != 0 {
+        if thread != 0 && thread != STARTING {
             // SAFETY: a thread that ended refuses the message without harm.
             let _ = unsafe { PostThreadMessageW(thread, WM_QUIT, WPARAM(0), LPARAM(0)) };
         }
@@ -395,7 +397,7 @@ thread_local! {
 }
 
 /// The body of the thread.
-fn serve(ready: std::sync::mpsc::SyncSender<u32>) {
+fn serve() {
     let mut message = MSG::default();
     // SAFETY: COM is initialized for this thread and left at its end; the
     // peek makes the queue of the thread before its number is told.
@@ -411,16 +413,25 @@ fn serve(ready: std::sync::mpsc::SyncSender<u32>) {
     let status = unsafe { DdeInitializeW(&raw mut instance, Some(respond), commands, None) };
     if status != 0 {
         report!("old installers find no program manager: DDE did not start ({status:#x})");
+        let _ = THREAD.compare_exchange(STARTING, 0, Ordering::SeqCst, Ordering::SeqCst);
         if initialized {
             // SAFETY: matched with the initialization above.
             unsafe { CoUninitialize() };
         }
         return;
     }
-    // The number is told only once DDE runs, so that a server that did
-    // not start is not taken for one that runs.
+    // The number is told only once DDE runs; where the server was stopped
+    // while it started, it ends again.
     // SAFETY: the call only reads the number of this thread.
-    let _ = ready.send(unsafe { GetCurrentThreadId() });
+    let number = unsafe { GetCurrentThreadId() };
+    let stopped = THREAD
+        .compare_exchange(STARTING, number, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err();
+    if stopped {
+        // SAFETY: the queue of this thread exists; the loop below ends at
+        // once.
+        let _ = unsafe { PostThreadMessageW(number, WM_QUIT, WPARAM(0), LPARAM(0)) };
+    }
     let handle = |name| {
         // SAFETY: the instance is initialized and the names are literals.
         unsafe { DdeCreateStringHandleW(instance, name, CP_WINUNICODE) }

@@ -21,7 +21,7 @@
 
 use std::collections::HashSet;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
@@ -72,7 +72,6 @@ pub(super) struct Registered {
 
 /// The thread of the objects while it runs.
 struct Running {
-    thread: u32,
     /// Set once the thread closed the objects; kept for the life of the
     /// process, as the end of the session may still wait on it.
     closed: HANDLE,
@@ -83,6 +82,11 @@ unsafe impl Send for Running {}
 
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 static CLOSE_REGISTERED: AtomicBool = AtomicBool::new(false);
+/// The number of the thread that runs, once it has its queue; zero before.
+static THREAD: AtomicU32 = AtomicU32::new(0);
+/// Whether the thread is to close the objects, also before it has its
+/// queue.
+static CLOSING: AtomicBool = AtomicBool::new(false);
 
 /// The objects of `ShellServiceObjects`, hosted by Tessera.
 pub struct ShellServiceObjects;
@@ -104,23 +108,19 @@ impl ShellServiceObjects {
                 return;
             }
         };
-        let (ready, thread) = std::sync::mpsc::sync_channel(1);
+        THREAD.store(0, Ordering::SeqCst);
+        CLOSING.store(false, Ordering::SeqCst);
         let event = closed.0 as isize;
         let started = thread::Builder::new()
             .name("shell service objects".to_owned())
-            .spawn(move || host(ready, HANDLE(event as *mut c_void)));
+            .spawn(move || host(HANDLE(event as *mut c_void)));
         if let Err(error) = started {
             report!("the objects that start with the shell are not started: {error}");
             // SAFETY: the event was made above and is used by nobody.
             let _ = unsafe { CloseHandle(closed) };
             return;
         }
-        // The thread tells its number once it has its queue of messages,
-        // which takes no waiting.
-        match thread.recv_timeout(Duration::from_secs(2)) {
-            Ok(thread) => *running = Some(Running { thread, closed }),
-            Err(_) => report!("the thread of the objects that start with the shell did not start"),
-        }
+        *running = Some(Running { closed });
         drop(running);
         if !CLOSE_REGISTERED.swap(true, Ordering::SeqCst) {
             ShellHost::close_at_session_end(begin_close);
@@ -147,28 +147,37 @@ fn begin_close() -> Option<HANDLE> {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .take()?;
-    // SAFETY: a thread that ended refuses the message without harm.
-    let posted = unsafe { PostThreadMessageW(running.thread, CLOSE_ALL, WPARAM(0), LPARAM(0)) };
-    posted.is_ok().then_some(running.closed)
+    CLOSING.store(true, Ordering::SeqCst);
+    // A thread without its queue yet sees `CLOSING` once it has one.
+    let thread = THREAD.load(Ordering::SeqCst);
+    if thread != 0 {
+        // SAFETY: a thread that ended refuses the message without harm.
+        let _ = unsafe { PostThreadMessageW(thread, CLOSE_ALL, WPARAM(0), LPARAM(0)) };
+    }
+    Some(running.closed)
 }
 
 /// The body of the thread: makes and opens the objects, then handles
 /// messages until it is told to close them.
-fn host(ready: std::sync::mpsc::SyncSender<u32>, closed: HANDLE) {
+fn host(closed: HANDLE) {
     let mut message = MSG::default();
     // SAFETY: peeking makes the queue of this thread, so that the message
     // that closes the objects cannot be lost; `message` outlives the call.
     unsafe {
         let _ = PeekMessageW(&raw mut message, None, 0, 0, PM_NOREMOVE);
-        let _ = ready.send(GetCurrentThreadId());
+        THREAD.store(GetCurrentThreadId(), Ordering::SeqCst);
     }
     // SAFETY: COM is initialized for this thread and left at its end.
     let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok();
-    let objects = open_all(registered());
+    let objects = match CLOSING.load(Ordering::SeqCst) {
+        true => Vec::new(),
+        false => open_all(registered()),
+    };
     // SAFETY: `message` outlives the calls; the objects' windows, if any,
     // get their messages dispatched here.
     unsafe {
-        while GetMessageW(&raw mut message, None, 0, 0).as_bool() {
+        while !CLOSING.load(Ordering::SeqCst) && GetMessageW(&raw mut message, None, 0, 0).as_bool()
+        {
             if message.hwnd.is_invalid() && message.message == CLOSE_ALL {
                 break;
             }
