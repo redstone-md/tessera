@@ -69,6 +69,7 @@ mod privacy;
 mod processes;
 mod program_path;
 mod properties;
+mod pty;
 mod quick_access;
 mod radios;
 mod registry;
@@ -267,6 +268,10 @@ pub use winlogon::{
     own_program_name, recovery_keys_held,
 };
 pub use zones::SystemZone;
+// files-terminal: the console of the terminal, and windows under the pointer.
+pub use pty::{
+    Console, ConsoleSize, ConsoleStart, ConsoleWriter, client_origin, root_window_at, shell_is_idle,
+};
 
 use std::ffi::c_void;
 use std::mem::size_of;

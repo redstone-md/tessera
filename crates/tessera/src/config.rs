@@ -808,8 +808,8 @@ pub struct Config {
     // #[serde(default)]
     // pub screenshot: crate::screenshot::ScreenshotConfig,
     // Wave 3, files-terminal: the terminal of the file manager and the drop-down terminal.
-    // #[serde(default)]
-    // pub terminal: crate::terminal::TerminalConfig,
+    #[serde(default)]
+    pub terminal: crate::terminal::TerminalConfig,
     // Wave 3, files-search-actions: the actions of the file menus, by kind of file.
     // #[serde(default, rename = "file_action")]
     // pub file_actions: Vec<crate::file_actions::FileAction>,

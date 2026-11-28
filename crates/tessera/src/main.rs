@@ -53,6 +53,7 @@ mod startup;
 mod surface;
 mod switcher;
 mod taskview;
+mod terminal;
 mod theme;
 mod tiling;
 mod time_zones;
