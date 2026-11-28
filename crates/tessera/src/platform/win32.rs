@@ -16,6 +16,7 @@ mod backdrop;
 mod bin;
 mod bluetooth;
 mod brightness;
+mod change_notify;
 mod clipboard_watch;
 mod commands;
 mod connections;
