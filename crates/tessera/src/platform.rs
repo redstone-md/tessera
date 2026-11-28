@@ -57,6 +57,7 @@ pub use win32::put_on_clipboard;
 pub use win32::rename_new;
 pub use win32::save_screenshot;
 pub use win32::spatial_sound;
+pub use win32::tessera_in_front;
 pub use win32::wheel_lines;
 pub use win32::{
     Account, AppSound, AppWindow, AppWindowId, AudioDevice, AudioOutput, BackdropPicture, Battery,
@@ -73,8 +74,10 @@ pub use win32::{
     pointer_on_own_window, read_desktop_if_requested, reveal_in_explorer, set_light_mode,
     show_properties,
 };
+pub use win32::{Activated, ToastActivation, ToastRoute};
 pub use win32::{ActiveTracking, GrabKey, MouseHook, PointerButton, PointerEvent};
 pub use win32::{Arranger, least_size};
+pub use win32::{AppNotificationSettings, NotificationSound, QuietProfile, WindowsQuiet};
 pub use win32::{Attributes, ExplorerSettings, NameRules, localized_candidates, shell_names};
 pub use win32::{AutoPlay, AutoPlayHandler, AutoPlayOffer, Chosen, Invoke, Medium};
 pub use win32::{Balloon, BalloonEvent};
@@ -162,6 +165,7 @@ pub use win32::{MouseBinding, MouseButtonName, MouseButtons};
 pub use win32::{NetworkLocation, RememberedDrive};
 pub use win32::{NewTemplate, OpenWithHandler, SendToTarget, choose_app};
 pub use win32::{PathDrop, PathDropTarget, PathZone, PathZones, ZoneEffect};
+pub use win32::{NotificationDatabase, package_data_folder, package_folder};
 pub use win32::{Poster, VideoLook, VideoOverlay};
 pub use win32::{PowerMode, PowerModeState};
 pub use win32::{PreviewColors, PreviewHost, PreviewShown};

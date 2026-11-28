@@ -2,32 +2,42 @@
 // Copyright (C) 2026 Tessera contributors.
 
 //! The notifications Tessera keeps: those of the Windows notification
-//! center and the history of those that left it. Widgets: `notifications`,
-//! the list, grouped by application, for a popup; `notifications-button`,
+//! center and the history of those that left it, with what their toasts
+//! hold (pictures, progress bars, input fields and buttons), and the jobs
+//! on files that run. Widgets: `notifications`, the list, grouped by
+//! application and by the headers of the toasts, for a popup, which takes
+//! the keys when its popup is opened by a key; `notifications-button`,
 //! a bell in the bar with the count of notifications that came since the
 //! list was last open, which opens the popup `notifications`; and `focus`,
 //! a switch for do not disturb. Actions: `quiet`, which switches do not
 //! disturb, and `notify`, which posts a notice of Tessera's own.
 
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use chrono::{Local, TimeZone};
+use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, AppContext, AsyncApp, Context, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity,
-    Window, div, img, px,
+    AnyElement, App, AppContext, AsyncApp, Context, FocusHandle, FontWeight, InteractiveElement,
+    IntoElement, KeyDownEvent, ListAlignment, ListState, MouseButton, MouseDownEvent,
+    ParentElement, Pixels, Point, Render, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, WeakEntity, Window, div, img, list, point, px, relative,
 };
 
 use crate::actions::{Action, Actions};
 use crate::banners::{APP_GLYPH, Banners, FocusChoice, Hush, Notice};
 use crate::config::{PopupConfig, WidgetSpec};
 use crate::i18n::Language;
+use crate::menu::{MenuEntry, Menus};
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
-use crate::notifications_store::{Entry, NotificationStore, groups, unix_now};
-use crate::platform::Occupation;
+use crate::notifications_store::{Entry, NotificationStore, Press, groups, unix_now};
+use crate::platform::{FileJobs, Launch, Occupation, QuietProfile, pointer_on_own_window, reveal};
+use crate::popup::{PopupAnchor, Popups};
 use crate::theme::Theme;
+use crate::toast_view::{self, Control, OnPress, ToastControls, ToastPress};
 use crate::ui::{icon, one_line, pill, state_layer, switch};
 
 /// How often the ages of the notifications and the state of do not
@@ -52,6 +62,21 @@ const CAPTION_SHARE: f32 = 0.85;
 
 /// The side of the logo of an application in the list.
 const LOGO: Pixels = px(20.);
+
+/// The height of the row of a header of toasts.
+const HEADER_ROW: f32 = 24.;
+
+/// The height of the row of a job on files.
+const JOB_ROW: f32 = 76.;
+
+/// The height of the row of buttons of a job that ended.
+const DESTINATION_ROW: f32 = 34.;
+
+/// How far beyond what is in sight the list draws rows.
+const LIST_OVERDRAW: f32 = 200.;
+
+/// The glyph of an entry of the menu of a notification.
+const MENU_GLYPH: &str = "\u{E8A7}";
 
 /// The height of the row of the `focus` widget.
 const FOCUS_ROW: f32 = 40.;
@@ -195,6 +220,8 @@ fn describe(hush: Hush, language: Language) -> String {
                 Occupation::Duplicating => "While a display is duplicated",
             })
             .to_owned(),
+        Hush::Windows(QuietProfile::AlarmsOnly) => language.say("Windows: alarms only").to_owned(),
+        Hush::Windows(_) => language.say("Windows: Do not disturb").to_owned(),
     }
 }
 
@@ -235,6 +262,34 @@ struct Item {
     unroll: Interaction,
     /// It was dismissed and is shrinking away.
     leaving: bool,
+    /// The fields and the choices of its toast.
+    controls: Option<ToastControls>,
+}
+
+impl Item {
+    /// Takes the controls of the toast its entry has now, keeping what was
+    /// typed while the toast stays the same.
+    fn take_controls(&mut self, cx: &mut App) {
+        let same = match (&self.controls, &self.entry.toast) {
+            (Some(controls), Some(toast)) => Arc::ptr_eq(controls.toast(), toast),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            self.controls = { self.entry.toast.clone() }.map(|toast| ToastControls::new(toast, cx));
+        }
+    }
+
+    /// Its height while its text is not unrolled.
+    fn height(&self, theme: &Theme) -> Pixels {
+        let toast = { self.entry.toast.as_deref() }
+            .map_or(px(0.), |toast| toast_view::extra_height(toast, theme));
+        let destination = match self.entry.destination.is_some() {
+            true => px(DESTINATION_ROW),
+            false => px(0.),
+        };
+        ITEM_HEIGHT + toast + destination
+    }
 }
 
 /// The buttons at the head of the group of an application.
@@ -243,8 +298,77 @@ struct GroupButtons {
     unroll: Interaction,
 }
 
+/// One row of the list, which the list draws only while it is in sight.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Row {
+    /// The heading of the jobs on files.
+    Jobs,
+    /// A job on files, by its number.
+    Job(u64),
+    /// The head of the group of an application, by its key.
+    Group(String),
+    /// The header of the toasts of an application that share it: the key
+    /// of the group, the identifier of the header and the newest
+    /// notification under it.
+    Header(String, String, u64),
+    /// A notification, by its key.
+    Item(u64),
+}
+
+/// The places in `members` (of `items`, newest first) ordered by the
+/// header of their toasts, as Windows groups them: the notifications of
+/// one header stand together, the header with the newest first, and those
+/// without one keep their places among them. Each comes with the
+/// identifier of its header.
+fn by_header<'a>(
+    members: &[usize],
+    header: impl Fn(usize) -> Option<&'a str>,
+) -> Vec<(usize, Option<&'a str>)> {
+    let mut order: Vec<Option<&str>> = Vec::new();
+    for &at in members {
+        let id = header(at);
+        if id.is_none() || !order.contains(&id) {
+            order.push(id);
+        }
+    }
+    let mut placed = Vec::with_capacity(members.len());
+    let mut taken = vec![false; members.len()];
+    for id in order {
+        for (place, &at) in members.iter().enumerate() {
+            if !taken[place] && header(at) == id {
+                taken[place] = true;
+                placed.push((at, id));
+                if id.is_none() {
+                    break;
+                }
+            }
+        }
+    }
+    placed
+}
+
+/// The span of rows that changed between `old` and `new`: where they
+/// start to differ, how many old rows the span had and how many new ones
+/// it has; `None` where they are the same.
+fn changed_span<T: PartialEq>(old: &[T], new: &[T]) -> Option<(usize, usize, usize)> {
+    let start = old
+        .iter()
+        .zip(new)
+        .take_while(|(one, other)| one == other)
+        .count();
+    if start == old.len() && start == new.len() {
+        return None;
+    }
+    let tail = { old[start..].iter().rev().zip(new[start..].iter().rev()) }
+        .take_while(|(one, other)| one == other)
+        .count();
+    Some((start, old.len() - start - tail, new.len() - start - tail))
+}
+
 /// Lists the notifications by application, the application with the
-/// newest one first.
+/// newest one first, under the jobs on files that run. The list draws
+/// only the rows in sight. Opened from the keyboard, the keys go to its
+/// first notification.
 struct NotificationList {
     /// In the order of the store, including notifications that are still
     /// leaving.
@@ -261,6 +385,17 @@ struct NotificationList {
     /// Whether the choices of how long do not disturb holds are shown.
     choosing: bool,
     choices: [Interaction; CHOICES.len()],
+    /// The rows as they were drawn last.
+    rows: Vec<Row>,
+    /// The rows whose height may have changed since they were drawn.
+    stale: HashSet<Row>,
+    list: ListState,
+    focus: FocusHandle,
+    /// The notification the keys are on, and the control of it.
+    selected: Option<u64>,
+    control: Option<Control>,
+    /// Hears when the window of the list becomes active.
+    activation: Option<Subscription>,
 }
 
 impl NotificationList {
@@ -278,6 +413,13 @@ impl NotificationList {
             quietness: Spring::new(motion.effects, if quiet { 1. } else { 0. }),
             choosing: false,
             choices: std::array::from_fn(|_| Interaction::new(&motion)),
+            rows: Vec::new(),
+            stale: HashSet::new(),
+            list: ListState::new(0, ListAlignment::Top, px(LIST_OVERDRAW)),
+            focus: cx.focus_handle(),
+            selected: None,
+            control: None,
+            activation: None,
         };
         this.sync(cx);
         this
@@ -292,7 +434,16 @@ impl NotificationList {
             return;
         };
         let motion = cx.global::<Theme>().motion;
-        let entries = store.entries();
+        let now = unix_now();
+        let entries: Vec<Entry> = { store.entries().iter() }
+            .filter(|entry| entry.listed(now))
+            .cloned()
+            .collect();
+        // The jobs move without the rows changing.
+        let jobs: Vec<Row> = { store.jobs().iter() }
+            .map(|job| Row::Job(job.event.id))
+            .collect();
+        self.stale.extend(jobs);
         for item in &mut self.items {
             let present = entries.iter().any(|entry| entry.key == item.entry.key);
             if !present && !item.leaving {
@@ -308,8 +459,10 @@ impl NotificationList {
                 .iter_mut()
                 .find(|item| item.entry.key == entry.key)
             {
-                if item.entry != *entry {
-                    item.entry = entry.clone();
+                if item.entry != entry {
+                    item.entry = entry;
+                    item.take_controls(cx);
+                    self.stale.insert(Row::Item(item.entry.key));
                 }
                 continue;
             }
@@ -318,16 +471,16 @@ impl NotificationList {
                 .unwrap_or(self.items.len());
             let mut presence = Spring::new(motion.spatial, 0.);
             presence.animate_to(1.);
-            self.items.insert(
-                at,
-                Item {
-                    entry: entry.clone(),
-                    presence,
-                    dismiss: Interaction::new(&motion),
-                    unroll: Interaction::new(&motion),
-                    leaving: false,
-                },
-            );
+            let mut item = Item {
+                entry,
+                presence,
+                dismiss: Interaction::new(&motion),
+                unroll: Interaction::new(&motion),
+                leaving: false,
+                controls: None,
+            };
+            item.take_controls(cx);
+            self.items.insert(at, item);
         }
         cx.defer(NotificationStore::see);
         cx.notify();
@@ -351,14 +504,33 @@ impl NotificationList {
         cx.notify();
     }
 
-    /// Opens the application of the notification `key`, which then leaves.
-    fn open(&mut self, key: u64, cx: &mut Context<Self>) {
-        if let Some(item) = self.item(key) {
-            item.leaving = true;
-            item.presence.animate_to(0.);
-        }
-        cx.defer(move |cx| NotificationStore::open(key, cx));
+    /// Does what `press` on the notification `key` asks, with what was
+    /// typed into it; it leaves unless it was only a choice.
+    fn press(&mut self, key: u64, press: Press, cx: &mut Context<Self>) {
+        let Some(item) = self.item(key) else {
+            return;
+        };
+        let values = { item.controls.as_ref() }
+            .map(|controls| controls.values(cx))
+            .unwrap_or_default();
+        item.leaving = true;
+        item.presence.animate_to(0.);
+        cx.defer(move |cx| NotificationStore::activate(key, press, &values, cx));
         cx.notify();
+    }
+
+    /// Does what was pressed on the parts of the toast of `key`.
+    fn press_toast(&mut self, key: u64, press: ToastPress, cx: &mut Context<Self>) {
+        match press {
+            ToastPress::Action(at) => self.press(key, Press::Action(at), cx),
+            ToastPress::Choose { input, choice } => {
+                if let Some(controls) = self.item(key).and_then(|item| item.controls.as_mut()) {
+                    controls.choose(input, choice);
+                    self.stale.insert(Row::Item(key));
+                    cx.notify();
+                }
+            }
+        }
     }
 
     /// Takes every notification away.
@@ -389,18 +561,457 @@ impl NotificationList {
         cx.notify();
     }
 
+    /// Opens the menu of the notification `key` at `at`, a point of the
+    /// window: the entries its toast puts there, and Dismiss.
+    fn open_menu(&mut self, key: u64, at: Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
+        let Some(item) = self.items.iter().find(|item| item.entry.key == key) else {
+            return;
+        };
+        let language = Language::of(cx);
+        let this = cx.entity().downgrade();
+        let mut entries: Vec<MenuEntry> = Vec::new();
+        if let Some(toast) = &item.entry.toast {
+            for (index, action) in toast
+                .actions
+                .iter()
+                .enumerate()
+                .filter(|(_, action)| action.context_menu)
+            {
+                let this = this.clone();
+                let label = toast_view::action_label(action, language);
+                entries.push(MenuEntry::new(MENU_GLYPH, label, move |cx| {
+                    this.update(cx, |this, cx| this.press(key, Press::Action(index), cx))
+                        .ok();
+                }));
+            }
+        }
+        let gone = this.clone();
+        entries.push(MenuEntry::new(
+            DISMISS_GLYPH,
+            language.say("Dismiss"),
+            move |cx| {
+                gone.update(cx, |this, cx| this.dismiss(vec![key], cx)).ok();
+            },
+        ));
+        match PopupAnchor::at_point(window, at, cx) {
+            Ok(anchor) => Menus::open(entries, anchor, cx),
+            Err(error) => report!("the menu of a notification has no place: {error:#}"),
+        }
+    }
+
+    /// Gives the keys to the first notification, where the window became
+    /// active while the pointer is not on Tessera, as it does when the
+    /// popup of the list is opened by a key.
+    fn take_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !window.is_window_active() || pointer_on_own_window() {
+            return;
+        }
+        self.focus.focus(window);
+        self.control = None;
+        let first = self.rows.iter().find_map(|row| match row {
+            Row::Item(key) => Some(*key),
+            _ => None,
+        });
+        self.select(first, cx);
+    }
+
+    /// Puts the keys on the notification `key`, and has the list show it.
+    fn select(&mut self, key: Option<u64>, cx: &mut Context<Self>) {
+        for old in self.selected.iter().chain(key.iter()) {
+            self.stale.insert(Row::Item(*old));
+        }
+        self.selected = key;
+        if let Some(row) =
+            key.and_then(|key| self.rows.iter().position(|row| *row == Row::Item(key)))
+        {
+            self.list.scroll_to_reveal_item(row);
+        }
+        cx.notify();
+    }
+
+    /// The notifications in the order they are drawn.
+    fn shown_keys(&self) -> Vec<u64> {
+        { self.rows.iter() }
+            .filter_map(|row| match row {
+                Row::Item(key) => Some(*key),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The field the keys are in, if one of the selected notification has
+    /// them.
+    fn typing_in(&self, window: &Window, cx: &App) -> Option<usize> {
+        let key = self.selected?;
+        let controls = self
+            .items
+            .iter()
+            .find(|item| item.entry.key == key)?
+            .controls
+            .as_ref()?;
+        (0..controls.toast().inputs.len()).find(|&input| {
+            controls
+                .field(input)
+                .is_some_and(|field| field.read(cx).is_focused(window))
+        })
+    }
+
+    /// Moves the keys to the next or the previous control of the selected
+    /// notification, and back to the notification after the last.
+    fn step_control(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.selected else {
+            return;
+        };
+        let Some(item) = self.items.iter().find(|item| item.entry.key == key) else {
+            return;
+        };
+        let controls = { item.entry.toast.as_deref() }
+            .map(toast_view::controls)
+            .unwrap_or_default();
+        let at = self
+            .control
+            .and_then(|control| controls.iter().position(|c| *c == control));
+        let next = match (at, back) {
+            (None, false) => controls.first().copied(),
+            (None, true) => controls.last().copied(),
+            (Some(at), false) => controls.get(at + 1).copied(),
+            (Some(0), true) => None,
+            (Some(at), true) => controls.get(at - 1).copied(),
+        };
+        self.control = next;
+        let field = match next {
+            Some(Control::Field(input)) => {
+                { item.controls.as_ref() }.and_then(|controls| controls.field(input).cloned())
+            }
+            _ => None,
+        };
+        match field {
+            Some(field) => field.read(cx).focus(window),
+            None => self.focus.focus(window),
+        }
+        self.stale.insert(Row::Item(key));
+        cx.notify();
+    }
+
+    /// The keys of the list: Up and Down move between the notifications,
+    /// Enter does what the one or its control in focus does, Delete
+    /// dismisses it, Tab goes through its fields and buttons, the menu key
+    /// opens its menu, and Escape closes the popup.
+    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let typing = self.typing_in(window, cx);
+        let shift = event.keystroke.modifiers.shift;
+        let keys = self.shown_keys();
+        let at = self
+            .selected
+            .and_then(|key| keys.iter().position(|k| *k == key));
+        match event.keystroke.key.as_str() {
+            "escape" if typing.is_some() => {
+                self.control = None;
+                self.focus.focus(window);
+            }
+            "escape" => cx.defer(Popups::close),
+            "tab" => self.step_control(shift, window, cx),
+            "down" if typing.is_none() => {
+                let next = at.map_or(0, |at| (at + 1).min(keys.len().saturating_sub(1)));
+                self.control = None;
+                self.select(keys.get(next).copied(), cx);
+            }
+            "up" if typing.is_none() => {
+                let next = at.map_or(0, |at| at.saturating_sub(1));
+                self.control = None;
+                self.select(keys.get(next).copied(), cx);
+            }
+            "delete" if typing.is_none() => {
+                let Some(at) = at else {
+                    return;
+                };
+                let next = keys
+                    .get(at + 1)
+                    .or_else(|| at.checked_sub(1).and_then(|before| keys.get(before)));
+                let next = next.copied();
+                self.dismiss(vec![keys[at]], cx);
+                self.control = None;
+                self.select(next, cx);
+            }
+            "enter" => self.enter(window, cx),
+            "menu" => self.menu_from_keys(window, cx),
+            "f10" if shift => self.menu_from_keys(window, cx),
+            _ => {}
+        }
+    }
+
+    /// Does what Enter does on the selected notification.
+    fn enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.selected else {
+            return;
+        };
+        let typing = self.typing_in(window, cx);
+        let toast = self
+            .items
+            .iter()
+            .find(|item| item.entry.key == key)
+            .and_then(|item| item.entry.toast.clone());
+        let control = typing.map(Control::Field).or(self.control);
+        match (control, toast) {
+            (Some(Control::Field(input)), Some(toast)) => {
+                if let Some(action) = toast_view::send_action(&toast, input) {
+                    self.press(key, Press::Action(action), cx);
+                }
+            }
+            (Some(Control::Choices(input)), _) => {
+                if let Some(controls) = self.item(key).and_then(|item| item.controls.as_mut()) {
+                    controls.choose_next(input);
+                }
+                self.stale.insert(Row::Item(key));
+                cx.notify();
+            }
+            (Some(Control::Action(action)), _) => self.press(key, Press::Action(action), cx),
+            _ => self.press(key, Press::Body, cx),
+        }
+    }
+
+    /// Opens the menu of the selected notification at its lower left.
+    fn menu_from_keys(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(key) = self.selected else {
+            return;
+        };
+        let Some(row) = self.rows.iter().position(|row| *row == Row::Item(key)) else {
+            return;
+        };
+        let Some(bounds) = self.list.bounds_for_item(row) else {
+            return;
+        };
+        let at = point(
+            bounds.origin.x + px(16.),
+            bounds.origin.y + bounds.size.height,
+        );
+        self.open_menu(key, at, window, cx);
+    }
+
+    /// The rows to draw, now.
+    fn layout_rows(&self, cx: &App) -> Vec<Row> {
+        let mut rows = Vec::new();
+        if let Some(store) = cx.try_global::<NotificationStore>()
+            && !store.jobs().is_empty()
+        {
+            rows.push(Row::Jobs);
+            rows.extend(store.jobs().iter().map(|job| Row::Job(job.event.id)));
+        }
+        for group in groups(&self.items, |item| &item.entry) {
+            rows.push(Row::Group(group.key.clone()));
+            let shown = match self.unrolled_groups.contains(&group.key) {
+                true => group.members.len(),
+                false => COLLAPSED,
+            };
+            let header = |at: usize| {
+                let toast = self.items[at].entry.toast.as_deref()?;
+                toast.header.as_ref().map(|header| header.id.as_str())
+            };
+            let mut last_header = None;
+            for (at, id) in by_header(&group.members, header).into_iter().take(shown) {
+                if let Some(id) = id.filter(|id| last_header != Some(*id)) {
+                    rows.push(Row::Header(
+                        group.key.clone(),
+                        id.to_owned(),
+                        self.items[at].entry.key,
+                    ));
+                }
+                last_header = id;
+                rows.push(Row::Item(self.items[at].entry.key));
+            }
+        }
+        rows
+    }
+
+    /// Tells the list of the rows that changed since it last drew them,
+    /// so that it measures them again.
+    fn refresh_rows(&mut self, rows: Vec<Row>) {
+        if let Some((start, old, new)) = changed_span(&self.rows, &rows) {
+            self.list.splice(start..start + old, new);
+        }
+        self.rows = rows;
+        let moving: Vec<Row> = { self.items.iter() }
+            .filter(|item| !item.presence.is_settled())
+            .map(|item| Row::Item(item.entry.key))
+            .collect();
+        self.stale.extend(moving);
+        for (at, row) in self.rows.iter().enumerate() {
+            if self.stale.contains(row) {
+                self.list.splice(at..at + 1, 1);
+            }
+        }
+        self.stale.clear();
+    }
+
+    /// Draws the row at `index`.
+    fn render_row(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = *cx.global::<Theme>();
+        let Some(row) = self.rows.get(index).cloned() else {
+            return div().into_any_element();
+        };
+        match row {
+            Row::Jobs => div()
+                .h(theme.bar.pill_height)
+                .px(theme.spacing.tiny)
+                .flex()
+                .items_center()
+                .font_weight(FontWeight::MEDIUM)
+                .child(Language::of(cx).say("Jobs"))
+                .into_any_element(),
+            Row::Job(id) => self.render_job(id, theme, cx),
+            Row::Group(key) => {
+                let members: Vec<usize> = { self.items.iter().enumerate() }
+                    .filter(|(_, item)| item.entry.group() == key)
+                    .map(|(at, _)| at)
+                    .collect();
+                let Some(&first) = members.first() else {
+                    return div().into_any_element();
+                };
+                let (app, app_id) = (
+                    self.items[first].entry.app.clone(),
+                    self.items[first].entry.app_id.clone(),
+                );
+                self.render_group_head(&key, &app, &app_id, &members, theme, window, cx)
+            }
+            Row::Header(_, _, newest) => {
+                let title = { self.items.iter().find(|item| item.entry.key == newest) }
+                    .and_then(|item| {
+                        item.entry
+                            .toast
+                            .as_ref()?
+                            .header
+                            .as_ref()
+                            .map(|header| header.title.clone())
+                    })
+                    .unwrap_or_default();
+                div()
+                    .id(("toast-header", newest as usize))
+                    .h(px(HEADER_ROW))
+                    .px(theme.spacing.small)
+                    .flex()
+                    .items_center()
+                    .text_size(theme.typography.label_size * CAPTION_SHARE)
+                    .text_color(theme.colors.primary)
+                    .cursor_pointer()
+                    .child(one_line(title))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.press(newest, Press::Header, cx)),
+                    )
+                    .into_any_element()
+            }
+            Row::Item(key) => {
+                let now = unix_now();
+                let unrolled = self.unrolled.contains(&key);
+                let selected = self.selected == Some(key);
+                let control = self.control.filter(|_| selected);
+                let Some(at) = self.items.iter().position(|item| item.entry.key == key) else {
+                    return div().into_any_element();
+                };
+                self.render_item(at, now, unrolled, selected, control, theme, window, cx)
+            }
+        }
+    }
+
+    /// A job on files: what it does, how far it is, and its Cancel.
+    fn render_job(&mut self, id: u64, theme: Theme, cx: &mut Context<Self>) -> AnyElement {
+        let language = Language::of(cx);
+        let Some(job) = { cx.try_global::<NotificationStore>() }
+            .and_then(|store| store.jobs().iter().find(|job| job.event.id == id).cloned())
+        else {
+            return div().into_any_element();
+        };
+        let caption = theme.typography.label_size * CAPTION_SHARE;
+        let fill = match job.share() {
+            Some(share) => div().h_full().w(relative(share)).bg(theme.colors.primary),
+            None => div()
+                .h_full()
+                .w(relative(0.3))
+                .bg(theme.colors.primary)
+                .opacity(0.6),
+        };
+        let cancel = job.event.can_cancel.then(|| {
+            div()
+                .id(("job-cancel", id as usize))
+                .flex_none()
+                .px(theme.spacing.small)
+                .py(theme.spacing.tiny)
+                .rounded(theme.shape.full)
+                .text_color(theme.colors.primary)
+                .hover(|style| style.bg(theme.colors.surface_container))
+                .child(language.say("Cancel"))
+                .on_click(cx.listener(move |_, _, _, _| FileJobs::cancel(id)))
+        });
+        div()
+            .w_full()
+            .pb(theme.spacing.small)
+            .child(
+                div()
+                    .h(px(JOB_ROW) - theme.spacing.small)
+                    .px(theme.spacing.medium - theme.spacing.tiny)
+                    .py(theme.spacing.small)
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .gap(px(4.))
+                    .rounded(theme.shape.medium)
+                    .bg(theme.colors.surface_container_highest)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(theme.spacing.small)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(one_line(job.event.title.clone())),
+                            )
+                            .children(cancel),
+                    )
+                    .child(
+                        div()
+                            .h(px(4.))
+                            .w_full()
+                            .rounded(theme.shape.full)
+                            .overflow_hidden()
+                            .bg(theme.colors.surface_container)
+                            .child(fill.rounded(theme.shape.full)),
+                    )
+                    .child(
+                        div()
+                            .text_size(caption)
+                            .text_color(theme.colors.on_surface_variant)
+                            .child(one_line(job.progress_text(language))),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    #[allow(clippy::too_many_arguments, reason = "the parts of one card")]
     fn render_item(
-        item: &mut Item,
+        &mut self,
+        at: usize,
         now: i64,
         unrolled: bool,
+        selected: bool,
+        control: Option<Control>,
         theme: Theme,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let presence = item.presence.value(window);
-        let dismiss_state = item.dismiss.state(window);
-        let unroll_state = item.unroll.state(window);
-        let entry = &item.entry;
+        let item = &mut self.items[at];
+        let (presence, dismiss_state, unroll_state) = (
+            item.presence.value(window),
+            item.dismiss.state(window),
+            item.unroll.state(window),
+        );
+        let (entry, height) = (item.entry.clone(), item.height(&theme));
         let key = entry.key;
         let language = Language::of(cx);
         let caption_size = theme.typography.label_size * CAPTION_SHARE;
@@ -429,6 +1040,7 @@ impl NotificationList {
                     if !this.unrolled.remove(&key) {
                         this.unrolled.insert(key);
                     }
+                    this.stale.insert(Row::Item(key));
                     cx.notify();
                 }));
             Interaction::track(button, cx, move |this: &mut Self| {
@@ -469,7 +1081,56 @@ impl NotificationList {
                 .child(SharedString::from(text.to_owned()));
             if unrolled { body } else { body.line_clamp(2) }
         });
-        let openable = entry.id.is_some() && !entry.app_id.is_empty();
+        let toast = entry.toast.clone();
+        let hero = { toast.as_deref() }
+            .and_then(|toast| toast_view::hero(toast, &entry.app_id, &theme, cx));
+        let parts = match &self.items[at].controls {
+            Some(controls) => {
+                let on_press: OnPress<Self> =
+                    Rc::new(move |this: &mut Self, press, _, cx| this.press_toast(key, press, cx));
+                toast_view::parts(key, controls, &entry.app_id, control, &theme, on_press, cx)
+            }
+            None => Vec::new(),
+        };
+        let destination = entry.destination.clone().map(|folder| {
+            let shown = folder.clone();
+            let button = |id: &'static str, label: &str| {
+                div()
+                    .id((id, key as usize))
+                    .flex_none()
+                    .h(px(DESTINATION_ROW - 6.))
+                    .px(theme.spacing.small)
+                    .flex()
+                    .items_center()
+                    .rounded(theme.shape.full)
+                    .bg(theme.colors.surface_container)
+                    .hover(|style| style.bg(theme.colors.secondary_container))
+                    .text_color(theme.colors.primary)
+                    .child(one_line(label.to_owned()))
+            };
+            div()
+                .flex_none()
+                .mt(px(6.))
+                .flex()
+                .gap(theme.spacing.small)
+                .child(
+                    button("open-destination", language.say("Open destination")).on_click(
+                        move |_, _, _| {
+                            Launch::new(&folder).start();
+                        },
+                    ),
+                )
+                .child(
+                    button("show-destination", language.say("Show in folder")).on_click(
+                        move |_, _, _| {
+                            if let Err(error) = reveal(&shown) {
+                                report!("{error:#}");
+                            }
+                        },
+                    ),
+                )
+        });
+        let openable = entry.toast.is_some() || (entry.id.is_some() && !entry.app_id.is_empty());
         let card = div()
             .id(("notification", key as usize))
             .px(theme.spacing.medium - theme.spacing.tiny)
@@ -480,11 +1141,24 @@ impl NotificationList {
             .overflow_hidden()
             .rounded(theme.shape.medium)
             .bg(ground)
+            .when(selected, |card| {
+                card.border_2().border_color(theme.colors.primary)
+            })
+            .children(hero)
             .child(header)
-            .children(body);
+            .children(body)
+            .children(parts)
+            .children(destination)
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_menu(key, event.position, window, cx);
+                }),
+            );
         let card = if openable {
             card.cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| this.open(key, cx)))
+                .on_click(cx.listener(move |this, _, _, cx| this.press(key, Press::Body, cx)))
         } else {
             card
         };
@@ -500,8 +1174,8 @@ impl NotificationList {
         if unrolled {
             slot.child(card).into_any_element()
         } else {
-            slot.h(ITEM_HEIGHT * presence.max(0.))
-                .child(card.h(ITEM_HEIGHT - theme.spacing.small))
+            slot.h(height * presence.max(0.))
+                .child(card.h(height - theme.spacing.small))
                 .into_any_element()
         }
     }
@@ -645,42 +1319,37 @@ impl Render for NotificationList {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
         let language = Language::of(cx);
-        let now = unix_now();
         let store = cx.try_global::<NotificationStore>();
         let error = store.and_then(NotificationStore::error).map(str::to_owned);
-
-        let mut cards: Vec<AnyElement> = Vec::new();
-        let grouped = groups(&self.items, |item| &item.entry);
-        for group in &grouped {
-            let first = &self.items[group.members[0]].entry;
-            let (app, app_id) = (first.app.clone(), first.app_id.clone());
-            let head = self.render_group_head(
-                &group.key,
-                &app,
-                &app_id,
-                &group.members,
-                theme,
-                window,
-                cx,
-            );
-            cards.push(head);
-            let shown = if self.unrolled_groups.contains(&group.key) {
-                group.members.len()
-            } else {
-                COLLAPSED
-            };
-            for &at in group.members.iter().take(shown) {
-                let unrolled = self.unrolled.contains(&self.items[at].entry.key);
-                let item = &mut self.items[at];
-                cards.push(Self::render_item(item, now, unrolled, theme, window, cx));
-            }
+        if self.activation.is_none() {
+            let activation = cx.observe_window_activation(window, |this, window, cx| {
+                this.take_keys(window, cx);
+            });
+            self.activation = Some(activation);
         }
-        // A notification that has finished leaving was just drawn at no
-        // height.
+
+        // A notification that has finished leaving was drawn at no height
+        // the last time. Those out of sight move on with time too.
+        let moment = Instant::now();
+        for item in &mut self.items {
+            item.presence.value_at(moment);
+        }
+        let before = self.items.len();
         self.items
             .retain(|item| !(item.leaving && item.presence.is_settled()));
+        if self.items.len() != before
+            && let Some(key) = self.selected
+            && !self.items.iter().any(|item| item.entry.key == key)
+        {
+            self.selected = None;
+            self.control = None;
+        }
+        let rows = self.layout_rows(cx);
+        self.refresh_rows(rows);
         let waiting = self.items.iter().filter(|item| !item.leaving).count();
-        let kept: HashSet<String> = grouped.into_iter().map(|group| group.key).collect();
+        let kept: HashSet<String> = { groups(&self.items, |item| &item.entry).into_iter() }
+            .map(|group| group.key)
+            .collect();
         self.groups.retain(|key, _| kept.contains(key));
 
         let state = self.clear.state(window);
@@ -733,19 +1402,27 @@ impl Render for NotificationList {
             .child(div().flex_1().child(language.say("Notifications")))
             .children((waiting > 0).then_some(clear))
             .children(banners.then_some(hold));
-        let quiet_note = hush.filter(|_| banners).map(|hush| {
-            div()
-                .flex_none()
-                .pb(theme.spacing.small)
-                .px(theme.spacing.tiny)
-                .text_size(theme.typography.label_size * CAPTION_SHARE)
-                .text_color(theme.colors.on_surface_variant)
-                .child(one_line(format!(
-                    "{} · {}",
-                    language.say("Do not disturb"),
-                    describe(hush, language)
-                )))
-        });
+        // Windows' own do not disturb is told of even without banners, as
+        // it holds back those of Windows.
+        let quiet_note = hush
+            .filter(|hush| banners || matches!(hush, Hush::Windows(_)))
+            .map(|hush| {
+                let text = match hush {
+                    Hush::Windows(_) => describe(hush, language),
+                    _ => format!(
+                        "{} \u{b7} {}",
+                        language.say("Do not disturb"),
+                        describe(hush, language)
+                    ),
+                };
+                div()
+                    .flex_none()
+                    .pb(theme.spacing.small)
+                    .px(theme.spacing.tiny)
+                    .text_size(theme.typography.label_size * CAPTION_SHARE)
+                    .text_color(theme.colors.on_surface_variant)
+                    .child(one_line(text))
+            });
         let choices = (banners && self.choosing && hush.is_none())
             .then(|| self.render_choices(theme, window, cx));
 
@@ -759,18 +1436,23 @@ impl Render for NotificationList {
                 .child(text)
                 .into_any_element()
         };
-        let list = match (error, cards.is_empty()) {
+        let list = match (error, self.rows.is_empty()) {
             (Some(error), true) => note(SharedString::from(error)),
             (_, true) => note(language.say("No notifications").into()),
-            (_, false) => div()
-                .id("notification-list")
+            (_, false) => {
+                let this = cx.entity();
+                list(self.list.clone(), move |index, window, cx| {
+                    this.update(cx, |this, cx| this.render_row(index, window, cx))
+                })
                 .flex_1()
                 .min_h(px(0.))
-                .overflow_y_scroll()
-                .child(div().w_full().flex().flex_col().children(cards))
-                .into_any_element(),
+                .into_any_element()
+            }
         };
         div()
+            .id("notifications")
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|this, event, window, cx| this.key_down(event, window, cx)))
             .flex_1()
             .min_h(px(0.))
             .flex()
@@ -972,6 +1654,26 @@ mod tests {
             describe(Hush::Scheduled(end), english),
             "As scheduled, until 07:00"
         );
+    }
+
+    #[test]
+    fn toasts_of_one_header_stand_together() {
+        // Newest first: 0 (inbox), 1 (none), 2 (news), 3 (inbox), 4 (none).
+        let headers = [Some("inbox"), None, Some("news"), Some("inbox"), None];
+        let members = [0, 1, 2, 3, 4];
+        let placed = by_header(&members, |at| headers[at]);
+        let order: Vec<usize> = placed.iter().map(|(at, _)| *at).collect();
+        assert_eq!(order, [0, 3, 1, 2, 4]);
+        assert_eq!(placed[1].1, Some("inbox"));
+    }
+
+    #[test]
+    fn only_the_rows_that_changed_are_measured_again() {
+        assert_eq!(changed_span(&[1, 2, 3], &[1, 2, 3]), None);
+        assert_eq!(changed_span(&[1, 2, 3], &[1, 9, 3]), Some((1, 1, 1)));
+        assert_eq!(changed_span(&[1, 3], &[1, 2, 3]), Some((1, 0, 1)));
+        assert_eq!(changed_span(&[1, 2, 3], &[3]), Some((0, 2, 0)));
+        assert_eq!(changed_span::<u8>(&[], &[]), None);
     }
 
     #[test]

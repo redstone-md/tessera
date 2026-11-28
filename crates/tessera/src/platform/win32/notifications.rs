@@ -2,36 +2,42 @@
 // Copyright (C) 2026 Tessera contributors.
 
 //! The notifications Windows keeps in its notification center, the logos
-//! of the applications that post them, and whether the user is busy with
-//! something that notifications should not interrupt.
+//! of the applications that post them, whether the user is busy with
+//! something that notifications should not interrupt, and the sounds of
+//! the sound scheme notifications play.
 //!
 //! Every call waits for Windows to answer, so none belongs on the thread
 //! that draws.
 //!
-//! What Windows lets another program read of a notification is its texts,
-//! its application and when it was posted. The buttons, pictures, input
-//! fields and the arguments the application would be started with are not
-//! given out (`UserNotificationListener` has no such properties), so a
-//! notification can only open its application, not do what its buttons
-//! would.
+//! What `UserNotificationListener` gives of a notification is its texts,
+//! its application and when it was posted. The rest of what its
+//! application wrote (pictures, buttons, input fields, the arguments of a
+//! click) is read from Windows' notification database by `wpn.rs`, and a
+//! click is done by `toast_activation.rs`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use serde::Deserialize;
 use windows::Foundation::Size;
+use windows::Foundation::TypedEventHandler;
 use windows::Storage::Streams::DataReader;
 use windows::UI::Notifications::Management::{
     UserNotificationListener, UserNotificationListenerAccessStatus,
 };
 use windows::UI::Notifications::{KnownNotificationBindings, NotificationKinds, UserNotification};
+use windows::Win32::Media::Audio::{
+    PlaySoundW, SND_ASYNC, SND_FILENAME, SND_FLAGS, SND_LOOP, SND_NODEFAULT,
+};
+use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 use windows::Win32::UI::Shell::{
     QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState,
 };
-use windows::core::Result as WindowsResult;
+use windows::core::{HSTRING, Result as WindowsResult};
 
 use super::execute::own_window_in_front;
 use super::hdr::paths;
+use super::registry::registry_text;
 
 /// Seconds between 1601, where Windows starts counting, and 1970.
 const WINDOWS_EPOCH_OFFSET: i64 = 11_644_473_600;
@@ -101,6 +107,37 @@ impl Notifications {
             .map_err(|error| format!("the notification could not be dismissed: {error}"))
     }
 
+    /// Follows the changes of the notification center: the receiver
+    /// yields once each time a notification comes or goes, for as long as
+    /// Tessera runs. Windows gives the event only to some programs (those
+    /// with an identity of a package, among others); where it refuses,
+    /// the reason is returned and the caller reads the list from time to
+    /// time instead.
+    pub fn watch() -> Result<async_channel::Receiver<()>, String> {
+        static WATCHING: LazyLock<Mutex<Option<async_channel::Receiver<()>>>> =
+            LazyLock::new(Mutex::default);
+        let mut watching = WATCHING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(receiver) = watching.as_ref() {
+            return Ok(receiver.clone());
+        }
+        let listener = listener()?;
+        let (sender, receiver) = async_channel::bounded(1);
+        let handler = TypedEventHandler::new(move |_, _| {
+            // One waiting wake is enough: the list is read whole.
+            sender.try_send(()).ok();
+            Ok(())
+        });
+        listener.NotificationChanged(&handler).map_err(|error| {
+            format!("Windows does not tell Tessera of new notifications: {error}")
+        })?;
+        // The listener and its handler live as long as the process.
+        std::mem::forget(listener);
+        *watching = Some(receiver.clone());
+        Ok(receiver)
+    }
+
     /// The image file of the logo of the application that posts under
     /// `app_id`, as Windows gave it with a notification of the application
     /// that [`Notifications::list`] read; `None` before that, and for an
@@ -111,6 +148,12 @@ impl Notifications {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         logos.get(app_id).cloned().flatten()
     }
+}
+
+/// Whether a window of Tessera is in front, where the user sees what it
+/// shows and needs no banner of it.
+pub fn tessera_in_front() -> bool {
+    own_window_in_front().is_some()
 }
 
 /// The listener, once Windows lets the shell read notifications. Windows
@@ -203,6 +246,75 @@ fn remember_logo(item: &UserNotification, app_id: &str) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(app_id.to_owned(), logo);
+}
+
+/// The sounds of notifications, as the sound scheme of Windows gives them.
+pub struct NotificationSound;
+
+/// The events of the sound scheme a toast may name after
+/// `ms-winsoundevent:`; the last stands for the looping alarms and calls.
+const SOUND_EVENTS: [&str; 5] = [
+    "Notification.Default",
+    "Notification.IM",
+    "Notification.Mail",
+    "Notification.Reminder",
+    "Notification.SMS",
+];
+
+/// What the looping sounds of alarms and calls start with.
+const LOOPING_EVENTS: &str = "Notification.Looping.";
+
+/// Whether `event` is an event of the sound scheme a toast may name: one
+/// of the plain ones, or a looping alarm or call.
+fn is_sound_event(event: &str) -> bool {
+    if SOUND_EVENTS
+        .iter()
+        .any(|known| event.eq_ignore_ascii_case(known))
+    {
+        return true;
+    }
+    let Some(rest) = event.strip_prefix(LOOPING_EVENTS) else {
+        return false;
+    };
+    let number = rest
+        .strip_prefix("Alarm")
+        .or_else(|| rest.strip_prefix("Call"));
+    number.is_some_and(|number| number.chars().all(|c| c.is_ascii_digit()))
+}
+
+impl NotificationSound {
+    /// The sound file the scheme of the user plays for `event`, as
+    /// `Notification.Default`; `None` where the event is none a toast
+    /// names, or the scheme plays nothing for it. It reads the registry.
+    pub fn of_event(event: &str) -> Option<std::path::PathBuf> {
+        if !is_sound_event(event) {
+            return None;
+        }
+        let key = format!("AppEvents\\Schemes\\Apps\\.Default\\{event}\\.Current");
+        let file = registry_text(HKEY_CURRENT_USER, &key, None, 1024)?;
+        let file = file.trim();
+        (!file.is_empty()).then(|| std::path::PathBuf::from(file))
+    }
+
+    /// Plays the sound file `file`, once or `looping` until [`Self::stop`]
+    /// or another sound; it returns at once. Nothing plays where the file
+    /// cannot be, and no other sound stands in for it.
+    pub fn play(file: &std::path::Path, looping: bool) {
+        let name = HSTRING::from(file.as_os_str());
+        let mut flags = SND_FILENAME | SND_ASYNC | SND_NODEFAULT;
+        if looping {
+            flags |= SND_LOOP;
+        }
+        // SAFETY: the name is NUL-terminated and copied by the call, which
+        // plays the sound on a thread of the system.
+        let _ = unsafe { PlaySoundW(&name, None, flags) };
+    }
+
+    /// Stops the sound that plays.
+    pub fn stop() {
+        // SAFETY: a null name stops what plays.
+        let _ = unsafe { PlaySoundW(windows::core::PCWSTR::null(), None, SND_FLAGS(0)) };
+    }
 }
 
 /// What keeps the user busy, of the things during which Windows holds its
@@ -298,6 +410,16 @@ mod tests {
         assert!(!shares_a_source::<u32>(&[]));
         assert!(!shares_a_source(&[(1, 0, 0), (1, 0, 1)]));
         assert!(shares_a_source(&[(1, 0, 0), (2, 0, 3), (1, 0, 0)]));
+    }
+
+    #[test]
+    fn only_the_sounds_of_notifications_are_played() {
+        assert!(is_sound_event("Notification.Default"));
+        assert!(is_sound_event("Notification.Looping.Alarm2"));
+        assert!(is_sound_event("Notification.Looping.Call10"));
+        assert!(!is_sound_event("Notification.Looping.Other"));
+        assert!(!is_sound_event("SystemExit"));
+        assert!(!is_sound_event("Notification.Looping.Alarm/x"));
     }
 
     #[test]

@@ -2599,6 +2599,13 @@ impl ConfigFile {
     /// where the file has something else under that name.
     fn file_action_entries(&mut self) -> Option<&mut ArrayOfTables> {
         let item = self.document.entry("file_action");
+// notifications-rich: the `[[notification_rule]]` entries, which the page
+// of the settings for them adds, changes, moves and removes.
+impl ConfigFile {
+    /// The `[[notification_rule]]` entries, made where there are none;
+    /// `None` where the file has something else under that name.
+    fn notification_rule_entries(&mut self) -> Option<&mut ArrayOfTables> {
+        let item = self.document.entry("notification_rule");
         let item = item.or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
         item.as_array_of_tables_mut()
     }
@@ -2688,12 +2695,42 @@ impl ConfigFile {
     /// entries is returned.
     pub fn add_file_action(&mut self, action: &toml::Table) -> Result<usize, String> {
         let values = Self::file_action_values(action)?;
+    /// Takes `[[notification_rule]]` away where no entry is left.
+    fn tidy_notification_rules(&mut self) {
+        let empty = { self.document.get("notification_rule") }
+            .and_then(Item::as_array_of_tables)
+            .is_some_and(ArrayOfTables::is_empty);
+        if empty {
+            self.document.remove("notification_rule");
+        }
+    }
+
+    /// The values of `rule`, checked to make a rule Tessera can use.
+    fn notification_rule_values(rule: &toml::Table) -> Result<Vec<(String, Value)>, String> {
+        toml::Value::Table(rule.clone())
+            .try_into::<crate::notifications_store::NotificationRule>()
+            .map_err(|error| format!("the rule is not one Tessera can use: {error}"))?;
+        rule.iter()
+            .map(|(key, value)| {
+                let written: Value = { value.to_string().parse() }
+                    .map_err(|_| format!("`{key}` of the rule cannot be written"))?;
+                Ok((key.clone(), written))
+            })
+            .collect()
+    }
+
+    /// Appends `rule` as a `[[notification_rule]]`, once it is checked to
+    /// be one Tessera can use; where it is among the entries is returned.
+    pub fn add_notification_rule(&mut self, rule: &toml::Table) -> Result<usize, String> {
+        let values = Self::notification_rule_values(rule)?;
         let mut entry = Table::new();
         for (key, value) in values {
             entry.insert(&key, Item::Value(value));
         }
         let entries = { self.file_action_entries() }
             .ok_or("`file_action` is not a list of tables in the file")?;
+        let entries = { self.notification_rule_entries() }
+            .ok_or("`notification_rule` is not a list of tables in the file")?;
         entries.push(entry);
         Ok(entries.len() - 1)
     }
@@ -2713,6 +2750,24 @@ impl ConfigFile {
         let gone: Vec<String> = { table.iter() }
             .map(|(key, _)| key.to_owned())
             .filter(|key| !action.contains_key(key))
+    /// Has the `[[notification_rule]]` at `index` say what `rule` says,
+    /// once it is checked: the keys it lacks are taken away, and those it
+    /// has are set where they are, keeping their comments.
+    pub fn set_notification_rule(
+        &mut self,
+        index: usize,
+        rule: &toml::Table,
+    ) -> Result<(), String> {
+        let values = Self::notification_rule_values(rule)?;
+        let entries = { self.notification_rule_entries() }
+            .ok_or("`notification_rule` is not a list of tables in the file")?;
+        let Some(table) = entries.get_mut(index) else {
+            self.tidy_notification_rules();
+            return Err("the rules of notifications have changed in the meantime".to_owned());
+        };
+        let gone: Vec<String> = { table.iter() }
+            .map(|(key, _)| key.to_owned())
+            .filter(|key| !rule.contains_key(key))
             .collect();
         for key in gone {
             table.remove(&key);
@@ -2744,6 +2799,10 @@ impl ConfigFile {
     /// is returned.
     pub fn remove_file_action(&mut self, index: usize) -> bool {
         let Some(entries) = self.file_action_entries() else {
+    /// Takes away the `[[notification_rule]]` at `index`. Whether there
+    /// was one is returned.
+    pub fn remove_notification_rule(&mut self, index: usize) -> bool {
+        let Some(entries) = self.notification_rule_entries() else {
             return false;
         };
         let there = index < entries.len();
@@ -3536,6 +3595,16 @@ mod key_entry_tests {
     /// were there is returned.
     pub fn move_file_action(&mut self, from: usize, to: usize) -> bool {
         let Some(entries) = self.file_action_entries() else {
+        self.tidy_notification_rules();
+        there
+    }
+
+    /// Moves the `[[notification_rule]]` at `from` to the place `to`, the
+    /// others moving up or down for it, comments and all; the first rule
+    /// that names an application decides, so the order matters. Whether
+    /// both places were there is returned.
+    pub fn move_notification_rule(&mut self, from: usize, to: usize) -> bool {
+        let Some(entries) = self.notification_rule_entries() else {
             return false;
         };
         let count = entries.len();
@@ -3546,6 +3615,12 @@ mod key_entry_tests {
         let mut tables: Vec<Table> = entries.iter().cloned().collect();
         // The file is written in the order of the places tables were read
         // at, so the places stay and the tables move between them.
+            self.tidy_notification_rules();
+            return false;
+        }
+        let mut tables: Vec<Table> = entries.iter().cloned().collect();
+        // The file is written in the order of the places the tables were
+        // read at, so the places stay and the tables move between them.
         let places: Vec<Option<isize>> = tables.iter().map(Table::position).collect();
         let moved = tables.remove(from);
         tables.insert(to, moved);
@@ -3571,6 +3646,21 @@ mod file_action_tests {
         let entries = table["file_action"].as_array().cloned().unwrap_or_default();
         { entries.iter() }
             .map(|entry| entry["name"].as_str().unwrap().to_owned())
+mod notification_rule_tests {
+    use super::*;
+
+    fn rule(text: &str) -> toml::Table {
+        toml::from_str(text).unwrap()
+    }
+
+    fn apps(file: &ConfigFile) -> Vec<String> {
+        let table = file.table().unwrap();
+        let entries = { table.get("notification_rule") }
+            .and_then(toml::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        { entries.iter() }
+            .map(|entry| entry["app"].as_str().unwrap().to_owned())
             .collect()
     }
 
@@ -3615,5 +3705,44 @@ mod file_action_tests {
         assert!(!file.remove_file_action(0));
         assert!(!file.document.to_string().contains("file_action"));
         assert!(file.document.to_string().contains("# Mine."));
+    fn rules_are_added_changed_moved_and_taken_away() {
+        let mut file = ConfigFile::parse("# Mine.\n[notifications]\nbanners = true\n").unwrap();
+        assert_eq!(
+            file.add_notification_rule(&rule("app = \"Teams\"\nbanners = false")),
+            Ok(0)
+        );
+        assert_eq!(file.add_notification_rule(&rule("app = \"Mail\"")), Ok(1));
+        assert_eq!(
+            file.add_notification_rule(&rule("app = \"*\"\nbadge = false")),
+            Ok(2)
+        );
+        let config = file.config().expect("it is usable");
+        assert_eq!(config.notification_rules.len(), 3);
+        assert!(!config.notification_rules[0].banners);
+        // What Tessera cannot use is not written.
+        assert!(
+            file.add_notification_rule(&rule("banners = false"))
+                .is_err()
+        );
+        assert!(
+            file.set_notification_rule(1, &rule("app = \"Mail\"\nodd = 1"))
+                .is_err()
+        );
+        assert!(
+            file.set_notification_rule(1, &rule("app = \"Outlook\"\npriority = true"))
+                .is_ok()
+        );
+        assert!(file.config().unwrap().notification_rules[1].priority);
+        assert!(file.set_notification_rule(9, &rule("app = \"x\"")).is_err());
+        assert!(file.move_notification_rule(2, 0));
+        assert_eq!(apps(&file), ["*", "Teams", "Outlook"]);
+        assert!(!file.move_notification_rule(3, 0));
+        assert!(file.remove_notification_rule(1));
+        assert_eq!(apps(&file), ["*", "Outlook"]);
+        assert!(file.remove_notification_rule(0) && file.remove_notification_rule(0));
+        assert!(!file.remove_notification_rule(0));
+        let text = file.document.to_string();
+        assert!(!text.contains("notification_rule"));
+        assert!(text.contains("# Mine.") && text.contains("banners = true"));
     }
 }

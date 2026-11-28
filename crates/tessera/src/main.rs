@@ -62,6 +62,8 @@ mod theme;
 mod tiling;
 mod time_zones;
 mod tip;
+mod toast;
+mod toast_view;
 mod tray_settings;
 mod ui;
 mod wallpaper;

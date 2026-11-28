@@ -113,6 +113,9 @@ mod tests {
             body: String::new(),
             posted: 0,
             present: true,
+            toast: None,
+            snoozed_until: None,
+            destination: None,
         }
     }
 
