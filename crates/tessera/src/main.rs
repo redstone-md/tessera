@@ -22,6 +22,7 @@ mod desktop;
 mod explorer_args;
 mod extension;
 mod field;
+mod file_actions;
 mod files;
 mod flyout;
 mod i18n;

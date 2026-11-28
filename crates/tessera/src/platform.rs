@@ -20,6 +20,7 @@ pub use win32::OwnInput;
 pub use win32::PowerChoices;
 #[allow(unused_imports, reason = "for the starts that wait for a program")]
 pub use win32::Process;
+pub use win32::PropertyReader;
 pub use win32::QuickFolder;
 pub use win32::RecycledItem;
 pub use win32::SessionKey;
