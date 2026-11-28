@@ -1,3 +1,138 @@
 # Rows of the settings filled by files-terminal. Format: modules/settings/rows.rs
 # (RowCard, and [[action]] titles). Plain labels are English texts of the
 # RUSSIAN table in i18n.rs.
+
+# [terminal]: the terminal under the panes of the file manager (F4), the
+# `terminal` widget and the drop-down terminal.
+
+[[card]]
+section = "Files"
+title = "Terminal"
+table = "terminal"
+search = ["Shell", "Drop-down terminal"]
+
+[[card.row]]
+key = "shell"
+kind = "text"
+label = "Shell"
+description = "pwsh, powershell, cmd, wsl, wsl:<distribution> or a command line; PowerShell 7 where it is installed, else Windows PowerShell, while it is not set."
+optional = true
+unset_label = "Automatic"
+
+[[card.row]]
+key = "font"
+kind = "font"
+label = "Font"
+default = "Cascadia Mono"
+
+[[card.row]]
+key = "font_size"
+kind = "number"
+label = "Font size"
+min = 6
+max = 48
+step = 1
+unit = "px"
+default = 13
+
+[[card.row]]
+key = "line_height"
+kind = "slider"
+label = "Line height"
+min = 0.8
+max = 3
+step = 0.05
+default = 1.25
+
+[[card.row]]
+key = "scrollback"
+kind = "number"
+label = "Lines kept"
+description = "Lines that scrolled out of sight and can be scrolled back to."
+min = 0
+max = 100000
+step = 1000
+default = 10000
+
+[[card.row]]
+key = "palette"
+kind = "list"
+label = "Colors"
+description = "The 16 named colors, #rrggbb, from black to bright white; the theme gives those not set."
+max = 16
+optional = true
+
+[[card.row]]
+key = "cursor"
+kind = "choice"
+label = "Cursor"
+default = "block"
+choices = [
+    { value = "block", label = "Block" },
+    { value = "underline", label = "Underline" },
+    { value = "beam", label = "Beam" },
+    { value = "block-steady", label = "Block, not blinking" },
+    { value = "underline-steady", label = "Underline, not blinking" },
+    { value = "beam-steady", label = "Beam, not blinking" },
+]
+
+[[card.row]]
+key = "copy_on_select"
+kind = "toggle"
+label = "Copy what is selected"
+default = false
+
+[[card.row]]
+key = "pane_follows"
+kind = "toggle"
+label = "The pane follows the shell"
+description = "The pane of the file manager goes to the folder the shell of the terminal under it reports."
+default = true
+
+[[card]]
+section = "Files"
+title = "Drop-down terminal"
+table = "terminal"
+
+[[card.row]]
+key = "dropdown_width"
+kind = "slider"
+label = "Width"
+description = "A share of the width of the display."
+min = 0.2
+max = 1
+step = 0.05
+default = 1
+
+[[card.row]]
+key = "dropdown_height"
+kind = "slider"
+label = "Height"
+description = "A share of the height of the display."
+min = 0.1
+max = 1
+step = 0.05
+default = 0.5
+
+[[card.row]]
+key = "dropdown_hides"
+kind = "toggle"
+label = "Hide when another window takes the keys"
+default = true
+
+# [files] restore_windows, which the pre-wave commit added for this package.
+
+[[card]]
+section = "Files"
+title = "File manager"
+table = "files"
+
+[[card.row]]
+key = "restore_windows"
+kind = "toggle"
+label = "Open the folder windows again at the next start"
+default = false
+
+[[action]]
+name = "terminal-dropdown"
+title = "Show or hide the drop-down terminal"

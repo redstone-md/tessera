@@ -2,3 +2,16 @@
 # ([[widget]] with a name, then [[widget.setting]] entries, each an
 # OptionDecl whose key is the option). Plain labels are English texts of
 # the RUSSIAN table in i18n.rs.
+
+# The terminals in tabs, which the popup `terminal` holds.
+
+[[widget]]
+name = "terminal"
+
+[[widget.setting]]
+key = "folder"
+kind = "path"
+pick = "folder"
+label = "Folder"
+description = "Where its shell starts; the folder of the user while it is not set."
+optional = true
