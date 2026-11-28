@@ -143,6 +143,11 @@ pub use win32::{PowerMode, PowerModeState};
 pub use win32::{PreviewColors, PreviewHost, PreviewShown};
 pub use win32::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
 pub use win32::{RadioId, RadioInfo, RadioType, Radios, airplane_mode};
+#[allow(
+    unused_imports,
+    reason = "the dock pins with them once dock-pins is merged"
+)]
+pub use win32::{Relaunch, relaunch_of};
 pub use win32::{Removal, app_settings, put_on_desktop};
 pub use win32::{Repeat, SessionInfo};
 pub use win32::{RunHistory, RunningProcess};

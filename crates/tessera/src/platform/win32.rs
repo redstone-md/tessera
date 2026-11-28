@@ -179,6 +179,7 @@ pub use input_names::OwnInput;
 pub use jump::EXPLORER_APP_ID;
 pub use jump::app_id_of_program;
 pub use jump::{JumpItem, JumpList, JumpTarget, KnownCategory};
+pub use jump::{Relaunch, relaunch_of};
 pub use key_locks::{KeyLocks, window_in_front};
 pub use keyboard::{InputLanguage, Typing};
 pub use lasting::WindowMark;

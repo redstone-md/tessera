@@ -37,7 +37,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
 use anyhow::{Context as _, bail};
-use windows::Win32::Storage::EnhancedStorage::{PKEY_AppUserModel_ID, PKEY_Title};
+use windows::Win32::Storage::EnhancedStorage::{
+    PKEY_AppUserModel_ID, PKEY_AppUserModel_PreventPinning, PKEY_AppUserModel_RelaunchCommand,
+    PKEY_AppUserModel_RelaunchDisplayNameResource, PKEY_AppUserModel_RelaunchIconResource,
+    PKEY_Title,
+};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, IPersistStream};
 use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
@@ -1003,6 +1007,86 @@ impl AppWindowId {
     }
 }
 
+/// What a window says about starting its application again and pinning
+/// it, in the properties of the window that the taskbar reads
+/// (`PKEY_AppUserModel_Relaunch*`, `PreventPinning` and `ID`): a program
+/// that runs in another, as a game in its launcher or a web application
+/// in a browser, names its own command, name and icon there.
+#[allow(dead_code, reason = "the dock pins with it once dock-pins is merged")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Relaunch {
+    /// The command line that starts the application again.
+    pub command: Option<String>,
+    /// The name of what it starts, with a name in the resources of a
+    /// program read.
+    pub display_name: Option<String>,
+    /// The file and the number of its icon.
+    pub icon: Option<(PathBuf, i32)>,
+    /// The window is not to be pinned.
+    pub prevent_pinning: bool,
+    /// The identifier the window states.
+    pub app_id: Option<String>,
+}
+
+impl Relaunch {
+    /// Whether the window said anything of it.
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// What `window` says about starting its application again and pinning
+/// it; `None` where it says nothing, as most windows. To be called where
+/// COM is initialized, not on the thread that draws: the call asks the
+/// window's process.
+///
+/// An identifier a process sets for all its windows with
+/// `SetCurrentProcessExplicitAppUserModelID` cannot be read from another
+/// process, so only one set on the window itself is found.
+#[allow(dead_code, reason = "the dock pins with it once dock-pins is merged")]
+pub fn relaunch_of(window: AppWindowId) -> Option<Relaunch> {
+    // SAFETY: COM is initialized on the calling thread, and the call
+    // tolerates a window that has since been destroyed.
+    let store: IPropertyStore = unsafe { SHGetPropertyStoreForWindow(window.hwnd()) }.ok()?;
+    let text = |key| {
+        // SAFETY: the store is valid; a key the window does not have reads
+        // as empty.
+        let value = unsafe { store.GetValue(key) }.ok()?;
+        let text = BSTR::try_from(&value).ok()?.to_string();
+        let text = text.trim().to_owned();
+        (!text.is_empty()).then_some(text)
+    };
+    // SAFETY: as above.
+    let prevent = unsafe { store.GetValue(&PKEY_AppUserModel_PreventPinning) }.ok();
+    let relaunch = Relaunch {
+        command: text(&PKEY_AppUserModel_RelaunchCommand),
+        display_name: text(&PKEY_AppUserModel_RelaunchDisplayNameResource)
+            .map(|name| spelled_out(&name)),
+        icon: text(&PKEY_AppUserModel_RelaunchIconResource)
+            .and_then(|resource| icon_resource(&resource)),
+        prevent_pinning: prevent.is_some_and(|value| bool::try_from(&value).unwrap_or(false)),
+        app_id: text(&PKEY_AppUserModel_ID),
+    };
+    (!relaunch.is_empty()).then_some(relaunch)
+}
+
+/// The file and the number of an icon written as `file,number` (the
+/// number below 0 for the identifier of a resource), with the variables
+/// of the environment in the file expanded; a file without a number is
+/// its first icon.
+fn icon_resource(resource: &str) -> Option<(PathBuf, i32)> {
+    let resource = resource.trim().trim_start_matches('@');
+    let (file, index) = match resource.rsplit_once(',') {
+        Some((file, index)) => match index.trim().parse::<i32>() {
+            Ok(index) => (file, index),
+            Err(_) => (resource, 0),
+        },
+        None => (resource, 0),
+    };
+    let file = file.trim().trim_matches('"');
+    (!file.is_empty()).then(|| (PathBuf::from(expand_variables(file)), index))
+}
+
 /// The identifier Windows makes up for the application whose program file
 /// is `executable` and which states none: the path of the file, with a
 /// well-known directory at its start replaced by the identifier of that
@@ -1065,6 +1149,24 @@ mod tests {
             id(r"C:\Program Files\App\app.exe"),
             r"{programs}\App\app.exe"
         );
+    }
+
+    #[test]
+    fn the_icon_a_window_names_for_its_relaunch_is_a_file_and_a_number() {
+        assert_eq!(
+            icon_resource(r"C:\Games\launcher.dll,-102"),
+            Some((PathBuf::from(r"C:\Games\launcher.dll"), -102))
+        );
+        assert_eq!(
+            icon_resource(r#""C:\Program Files\App\app.exe""#),
+            Some((PathBuf::from(r"C:\Program Files\App\app.exe"), 0))
+        );
+        assert_eq!(
+            icon_resource(r"@C:\a,b\app.ico"),
+            Some((PathBuf::from(r"C:\a,b\app.ico"), 0))
+        );
+        assert_eq!(icon_resource("  "), None);
+        assert!(Relaunch::default().is_empty());
     }
 
     #[test]
