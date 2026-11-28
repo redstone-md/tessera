@@ -1979,6 +1979,256 @@ fn widget_at_place<'a>(
             let cards = document.get_mut("card")?.as_array_of_tables_mut()?;
             let content = cards.get_mut(*index)?.get_mut("content")?;
             content.as_array_mut()?.get_mut(*widget)
+// widget-options: the popups of the file and the widgets in them, as the
+// popup page of the settings changes them.
+impl ConfigFile {
+    /// The `[[popup]]` of the file named `name`.
+    fn popup_table(&mut self, name: &str) -> Option<&mut Table> {
+        let popups = self.document.get_mut("popup")?.as_array_of_tables_mut()?;
+        { popups.iter_mut() }.find(|popup| popup.get("name").and_then(Item::as_str) == Some(name))
+    }
+
+    /// Appends a `[[popup]]` that holds what `popup` holds. False where
+    /// its name is empty or the file has a popup of that name already.
+    pub fn add_popup(&mut self, popup: &super::PopupConfig) -> bool {
+        let name = popup.name.trim();
+        if name.is_empty() || self.popup_table(name).is_some() {
+            return false;
+        }
+        let mut table = Table::new();
+        table.insert("name", value(name));
+        if let Some(place) = popup_place_name(popup.place) {
+            table.insert("place", value(place));
+        }
+        table.insert("width", Item::Value(length_value(popup.width)));
+        table.insert("height", Item::Value(length_value(popup.height)));
+        let column = |specs: &[super::WidgetSpec]| {
+            let mut widgets: Array = specs.iter().map(spec_value).collect();
+            widgets.fmt();
+            Item::Value(Value::Array(widgets))
+        };
+        table.insert("content", column(&popup.content));
+        if !popup.side.is_empty() {
+            table.insert("side", column(&popup.side));
+        }
+        let item = { self.document.entry("popup") }
+            .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+        let Some(popups) = item.as_array_of_tables_mut() else {
+            return false;
+        };
+        popups.push(table);
+        true
+    }
+
+    /// Takes the `[[popup]]` named `name` out of the file; whatever opens
+    /// it then opens the popup of that name a module brings, if one does.
+    pub fn remove_popup(&mut self, name: &str) -> bool {
+        let popups = { self.document.get_mut("popup") }.and_then(Item::as_array_of_tables_mut);
+        let Some(popups) = popups else {
+            return false;
+        };
+        let found = { popups.iter() }
+            .position(|popup| popup.get("name").and_then(Item::as_str) == Some(name));
+        let Some(index) = found else {
+            return false;
+        };
+        popups.remove(index);
+        if popups.is_empty() {
+            self.document.remove("popup");
+        }
+        true
+    }
+
+    /// Names the `[[popup]]` named `from` `to`, and so does whatever opens
+    /// it: the `popup` of a widget, the `start` of a dock, and the `popup`
+    /// and the `popup` action of a `[[key]]`. False where `to` is empty or
+    /// taken, or there is no popup `from`.
+    pub fn rename_popup(&mut self, from: &str, to: &str) -> bool {
+        let to = to.trim();
+        if to.is_empty() || from == to || self.popup_table(to).is_some() {
+            return false;
+        }
+        let Some(popup) = self.popup_table(from) else {
+            return false;
+        };
+        popup.insert("name", value(to));
+        self.each_widget(|widget| rename_opened(widget, from, to));
+        let keys = { self.document.get_mut("key") }.and_then(Item::as_array_of_tables_mut);
+        for key in keys.into_iter().flat_map(|keys| keys.iter_mut()) {
+            if key.get("popup").and_then(Item::as_str) == Some(from) {
+                key.insert("popup", value(to));
+            }
+            let opens = key.get("action").and_then(Item::as_str) == Some("popup");
+            if opens && key.get("arg").and_then(Item::as_str) == Some(from) {
+                key.insert("arg", value(to));
+            }
+        }
+        true
+    }
+
+    /// Calls `change` with every widget of the surfaces, the popups and
+    /// the cards of the desktop.
+    fn each_widget(&mut self, mut change: impl FnMut(&mut Value)) {
+        const LISTS: [(&str, &[&str]); 3] = [
+            ("surface", &["start", "center", "end"]),
+            ("popup", &["content", "side"]),
+            ("card", &["content"]),
+        ];
+        for (tables, keys) in LISTS {
+            let entries = { self.document.get_mut(tables) }.and_then(Item::as_array_of_tables_mut);
+            for entry in entries.into_iter().flat_map(|entries| entries.iter_mut()) {
+                for (key, item) in entry.iter_mut() {
+                    if keys.contains(&key.get())
+                        && let Some(list) = item.as_array_mut()
+                    {
+                        list.iter_mut().for_each(&mut change);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sets `place`, `width` or `height` of the `[[popup]]` named `name`;
+    /// `None` takes it out. False for another key or where there is no
+    /// such popup.
+    pub fn set_popup_field(&mut self, name: &str, key: &str, value: Option<Value>) -> bool {
+        if !POPUP_FIELDS.contains(&key) {
+            return false;
+        }
+        let Some(popup) = self.popup_table(name) else {
+            return false;
+        };
+        match value {
+            Some(value) => {
+                popup.insert(key, Item::Value(value));
+            }
+            None => {
+                popup.remove(key);
+            }
+        }
+        true
+    }
+
+    /// Makes `widgets` the widgets of `column` of the `[[popup]]` named
+    /// `name`: those it holds, by their place, with their options and
+    /// what is written beside them, and new ones by name. An empty second
+    /// column leaves the file. False where there is no such popup or a
+    /// place is past its widgets.
+    pub fn set_popup_widgets(
+        &mut self,
+        name: &str,
+        column: PopupColumn,
+        widgets: &[PopupWidget],
+    ) -> bool {
+        let Some(popup) = self.popup_table(name) else {
+            return false;
+        };
+        let held: Vec<Value> = { popup.get(column.key()) }
+            .and_then(Item::as_array)
+            .map(|held| held.iter().cloned().collect())
+            .unwrap_or_default();
+        let mut list = Array::new();
+        for widget in widgets {
+            match widget {
+                PopupWidget::Kept(index) => match held.get(*index) {
+                    Some(kept) => list.push_formatted(kept.clone()),
+                    None => return false,
+                },
+                PopupWidget::New(name) => list.push(name.as_str()),
+            }
+        }
+        list.fmt();
+        if list.is_empty() && column == PopupColumn::Side {
+            popup.remove(column.key());
+        } else {
+            popup.insert(column.key(), Item::Value(Value::Array(list)));
+        }
+        true
+    }
+}
+
+/// The keys of a `[[popup]]` that `set_popup_field` sets.
+const POPUP_FIELDS: [&str; 3] = ["place", "width", "height"];
+
+/// One of the two columns of widgets of a popup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PopupColumn {
+    /// `content`, stacked from the top.
+    Content,
+    /// `side`, the second column at the right.
+    Side,
+}
+
+impl PopupColumn {
+    pub const ALL: [Self; 2] = [Self::Content, Self::Side];
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Content => "content",
+            Self::Side => "side",
+        }
+    }
+}
+
+/// A widget of a column as `set_popup_widgets` lays them out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PopupWidget {
+    /// The one at this place of the column now, as it is written.
+    Kept(usize),
+    /// A new one, of this name, without options.
+    New(String),
+}
+
+/// What the file writes for where a popup opens; nothing for the place
+/// next to the bar, which it takes without the key.
+pub fn popup_place_name(place: super::PopupPlace) -> Option<&'static str> {
+    match place {
+        super::PopupPlace::Surface => None,
+        super::PopupPlace::Center => Some("center"),
+        super::PopupPlace::Top => Some("top"),
+    }
+}
+
+/// A widget as the file writes it: its name alone where it has nothing
+/// more, a table otherwise.
+fn spec_value(spec: &super::WidgetSpec) -> Value {
+    if spec.popup.is_none() && spec.options.is_empty() {
+        return spec.widget.as_str().into();
+    }
+    let mut table = InlineTable::new();
+    table.insert("widget", spec.widget.as_str().into());
+    if let Some(popup) = &spec.popup {
+        table.insert("popup", popup.as_str().into());
+    }
+    for (key, option) in &spec.options {
+        table.insert(key, edit_value(option));
+    }
+    table.fmt();
+    Value::InlineTable(table)
+}
+
+/// A value read from the file, as it is written again.
+fn edit_value(read: &toml::Value) -> Value {
+    match read {
+        toml::Value::String(text) => text.as_str().into(),
+        toml::Value::Integer(number) => (*number).into(),
+        toml::Value::Float(number) => (*number).into(),
+        toml::Value::Boolean(flag) => (*flag).into(),
+        toml::Value::Datetime(moment) => {
+            { moment.to_string().parse::<Value>() }.unwrap_or_else(|_| moment.to_string().into())
+        }
+        toml::Value::Array(items) => {
+            let mut list: Array = items.iter().map(edit_value).collect();
+            list.fmt();
+            Value::Array(list)
+        }
+        toml::Value::Table(entries) => {
+            let mut table = InlineTable::new();
+            for (key, entry) in entries {
+                table.insert(key, edit_value(entry));
+            }
+            table.fmt();
+            Value::InlineTable(table)
         }
     }
 }
@@ -2265,5 +2515,161 @@ content = ["memory", "clock"]
             assert_eq!(clock.options.get("format"), Some(&"%T".into()));
         }
         assert!(!edited.set_option("weather", "unit", None));
+/// Has `widget`, and the widgets written inside it (the tiles of `tiles`),
+/// open the popup `to` where they opened `from`: their `popup`, and the
+/// `start` of a dock.
+fn rename_opened(widget: &mut Value, from: &str, to: &str) {
+    match widget {
+        Value::InlineTable(table) => {
+            let dock = table.get("widget").and_then(Value::as_str) == Some(WINDOWS_WIDGET);
+            for (key, item) in table.iter_mut() {
+                let names = key.get() == "popup" || (dock && key.get() == "start");
+                if names && item.as_str() == Some(from) {
+                    let decor = item.decor().clone();
+                    *item = to.into();
+                    *item.decor_mut() = decor;
+                } else {
+                    rename_opened(item, from, to);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items.iter_mut() {
+                rename_opened(item, from, to);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod popup_tests {
+    use super::super::{PopupConfig, PopupPlace};
+    use super::*;
+
+    const POPUPS: &str = r#"# Mine.
+[[surface]]
+edge = "top"
+thickness = 40
+start = [{ widget = "clock", popup = "calendar" }, { widget = "windows", start = "calendar" }]
+
+# The calendar.
+[[popup]]
+name = "calendar"
+width = 620
+height = 400
+content = ["calendar", { widget = "clock", format = "%H" }] # two
+side = ["notifications"]
+
+[[popup]]
+name = "settings"
+place = "center"
+width = 1000
+height = 700
+content = ["settings"]
+
+[[key]]
+press = "win+alt+d"
+action = "popup"
+arg = "calendar"
+"#;
+
+    fn file() -> ConfigFile {
+        ConfigFile::parse(POPUPS).unwrap()
+    }
+
+    fn popup<'a>(config: &'a Config, name: &str) -> Option<&'a PopupConfig> {
+        config.popups.iter().find(|popup| popup.name == name)
+    }
+
+    #[test]
+    fn a_popup_is_added_as_it_is_and_only_once() {
+        let mut edited = file();
+        let config = edited.config().unwrap();
+        let mut copy = popup(&config, "calendar").unwrap().clone();
+        assert!(!edited.add_popup(&copy));
+        copy.name = "agenda".to_owned();
+        copy.place = PopupPlace::Top;
+        assert!(edited.add_popup(&copy));
+        let config = edited.config().expect("it stays usable");
+        let added = popup(&config, "agenda").unwrap();
+        assert_eq!(added.content, copy.content);
+        assert_eq!(added.side, copy.side);
+        assert_eq!(added.place, PopupPlace::Top);
+        assert_eq!((added.width, added.height), (620., 400.));
+        copy.name = " ".to_owned();
+        assert!(!edited.add_popup(&copy));
+    }
+
+    #[test]
+    fn a_popup_is_renamed_with_what_opens_it() {
+        let mut edited = file();
+        assert!(!edited.rename_popup("calendar", "settings"));
+        assert!(!edited.rename_popup("calendar", " "));
+        assert!(!edited.rename_popup("nothing", "else"));
+        assert!(edited.rename_popup("calendar", "agenda"));
+        let config = edited.config().expect("it stays usable");
+        assert!(popup(&config, "calendar").is_none());
+        assert!(popup(&config, "agenda").is_some());
+        let start = &config.surfaces[0].start;
+        assert_eq!(start[0].popup.as_deref(), Some("agenda"));
+        assert_eq!(start[1].options["start"].as_str(), Some("agenda"));
+        assert_eq!(config.keys[0].arg.as_deref(), Some("agenda"));
+        let text = edited.document.to_string();
+        assert!(text.contains("# The calendar."));
+        assert!(text.contains("# two"));
+    }
+
+    #[test]
+    fn the_fields_of_a_popup_are_set_and_taken_out() {
+        let mut edited = file();
+        assert!(edited.set_popup_field("calendar", "place", Some("center".into())));
+        assert!(edited.set_popup_field("calendar", "width", Some(500.into())));
+        assert!(!edited.set_popup_field("calendar", "name", Some("x".into())));
+        assert!(!edited.set_popup_field("nothing", "width", Some(500.into())));
+        let config = edited.config().unwrap();
+        let calendar = popup(&config, "calendar").unwrap();
+        assert_eq!(calendar.place, PopupPlace::Center);
+        assert_eq!(calendar.width, 500.);
+        assert!(edited.set_popup_field("calendar", "place", None));
+        let config = edited.config().unwrap();
+        assert_eq!(
+            popup(&config, "calendar").unwrap().place,
+            PopupPlace::Surface
+        );
+    }
+
+    #[test]
+    fn the_widgets_of_a_popup_are_added_moved_and_taken_out() {
+        let mut edited = file();
+        let order = [
+            PopupWidget::Kept(1),
+            PopupWidget::New("media".to_owned()),
+            PopupWidget::Kept(0),
+        ];
+        assert!(edited.set_popup_widgets("calendar", PopupColumn::Content, &order));
+        let past = [PopupWidget::Kept(7)];
+        assert!(!edited.set_popup_widgets("calendar", PopupColumn::Content, &past));
+        assert!(edited.set_popup_widgets("calendar", PopupColumn::Side, &[]));
+        let config = edited.config().expect("it stays usable");
+        let calendar = popup(&config, "calendar").unwrap();
+        let names: Vec<&str> = { calendar.content.iter() }
+            .map(|spec| spec.widget.as_str())
+            .collect();
+        assert_eq!(names, ["clock", "media", "calendar"]);
+        assert_eq!(calendar.content[0].options["format"].as_str(), Some("%H"));
+        assert!(calendar.side.is_empty());
+        assert!(!edited.document.to_string().contains("side"));
+    }
+
+    #[test]
+    fn a_popup_is_taken_out_of_the_file() {
+        let mut edited = file();
+        assert!(edited.remove_popup("calendar"));
+        assert!(!edited.remove_popup("calendar"));
+        assert!(edited.remove_popup("settings"));
+        let config = edited.config().expect("it stays usable");
+        assert!(config.popups.is_empty());
+        assert!(!edited.document.to_string().contains("[[popup]]"));
     }
 }

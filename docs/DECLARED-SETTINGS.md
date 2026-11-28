@@ -44,6 +44,10 @@ choices = [
 | `sides` | **Every side** with one field, or **Each side** with a field for top, right, bottom and left. `min` and `max` bound each number. | A number for every side, or a table `{ top, right, bottom, left }` of numbers, a side left out being 0 |
 
 A `list` with `choices` is a choice of several: a box for each choice, ticked while the list holds it, written in the order of the choices whatever order they were ticked in; an optional one leaves the file when no box is ticked. A `list` with `min` and `max` bounds how many items it has (`min = 2` and `max = 2` for exactly two): it shows at least `min` rows, offers no **Add** at `max`, keeps its last `min` rows, and is written only once it has enough items.
+| `time` | A field for now; a control of its own is not done yet. | A time of day `HH:MM`, two digits each, from `00:00` to `23:59` |
+| `sides` | A field for now, which takes one number; a control of its own is not done yet. `min` and `max` bound each number. | A number for every side, or a table `{ top, right, bottom, left }` of numbers, a side left out being 0 |
+
+A `list` with `choices` takes only their values as items, and its `min` and `max` bound how many items it has (`min = 2` and `max = 2` for exactly two); its rows are not drawn as choices yet.
 
 There is no kind for passwords, tokens or keys: those an extension reads stay in `config.toml`, written by hand, and its description says so.
 

@@ -1,3 +1,18 @@
 # Rows of the settings filled by widget-options. Format: modules/settings/rows.rs
 # (RowCard, and [[action]] titles). Plain labels are English texts of the
 # RUSSIAN table in i18n.rs.
+
+# The Search page: every runner of the launcher, switched on and off and put
+# in an order, the web shortcuts, the exchange rates and the history.
+[[card]]
+section = "Search"
+title = "Runners"
+page = "runner-settings"
+search = ["Launcher", "Web shortcuts", "Exchange rates", "Clear history"]
+
+# The popups of the configuration and the widgets in them.
+[[card]]
+section = "Widgets"
+title = "Popups"
+page = "popup-settings"
+search = ["Add popup", "Second column"]

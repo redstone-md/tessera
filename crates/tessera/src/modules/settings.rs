@@ -14,6 +14,7 @@ mod dynamic;
 mod placed;
 pub(super) mod rows;
 mod search;
+pub(super) mod rows;
 
 #[allow(unused_imports, reason = "for the Shortcuts page of shortcuts-editor")]
 pub(crate) use rows::{ActionTitle, action_titles};

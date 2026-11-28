@@ -564,6 +564,9 @@
 #           A widget of an extension may come with a popup of its own;
 #           popup = "" switches that off
 #   other keys are options of that widget
+# The settings set the options of every built-in widget too: Widgets has a
+# card for each widget placed (Configure… in the menu of a widget of a bar
+# opens it), and Search the runners of the launchers.
 #
 # Built-in widgets:
 #   "clock"     date and time; option format, a strftime pattern
@@ -984,6 +987,8 @@ center = [{ widget = "windows", start = "launcher" }]
 #                  "top": near the top of the display, in the middle of its
 #                  width, the rest not dimmed
 #   content        widgets, stacked from the top
+# The page Popups in the Widgets section of the settings adds, renames and
+# removes these, and sets their place, size and widgets.
 #
 # Modules bring popups of their own: winx (300 by 660), power-dialog (in the
 # middle, 400 by 600), display-mode (320 by 336) and keyboard-list (340 by

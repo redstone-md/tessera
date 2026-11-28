@@ -28,6 +28,7 @@ pub mod night;
 mod notifications;
 mod overview;
 mod plan;
+mod popup_settings;
 mod power_dialog;
 mod power_mode;
 mod power_settings;
@@ -36,6 +37,7 @@ mod problems;
 mod quick;
 mod run;
 mod runner;
+mod runner_settings;
 mod session;
 mod settings;
 mod settings_parts;
@@ -64,6 +66,7 @@ use crate::module::Module;
 use crate::session::ShellModule;
 pub use marketplace::Updates;
 pub use power_dialog::DesktopClosing;
+pub(crate) use runner_settings::RunnerCatalog;
 pub use settings::Settings;
 #[allow(unused_imports, reason = "for the Shortcuts page of shortcuts-editor")]
 pub(crate) use settings::{ActionTitle, action_titles};
@@ -87,6 +90,8 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(launcher::LauncherModule),
         Box::new(run::RunModule),
         Box::new(runner::RunnerModule),
+        Box::new(runner_settings::RunnerSettingsModule),
+        Box::new(popup_settings::PopupSettingsModule),
         Box::new(marketplace::MarketplaceModule {
             registries: config.registries(),
         }),

@@ -2,3 +2,962 @@
 # ([[widget]] with a name, then [[widget.setting]] entries, each an
 # OptionDecl whose key is the option). Plain labels are English texts of
 # the RUSSIAN table in i18n.rs.
+#
+# Every option a built-in widget reads is declared here, with the default,
+# the range and the words its code takes. The options of the dock's `sort`
+# (dock-pins), of the workspaces widget and of every widget (`*`,
+# theme-styles) are declared in the files of those packages. `web` of the
+# launcher and the runner is a table of keywords and addresses, which no
+# kind of setting writes; the Search page of the settings edits it.
+
+# The clock and the calendar.
+
+[[widget]]
+name = "clock"
+
+[[widget.setting]]
+key = "format"
+kind = "text"
+label = "Format"
+description = "The date and time as a strftime pattern, such as %H:%M."
+default = "%a %-d %b  %H:%M"
+
+[[widget.setting]]
+key = "zones"
+kind = "list"
+label = "Time zones"
+description = "Zones whose time the tip and the calendar give, by IANA name, Windows name or city."
+
+[[widget]]
+name = "calendar"
+
+[[widget.setting]]
+key = "week_start"
+kind = "choice"
+label = "Week starts on"
+description = "The first day of each row."
+default = "monday"
+choices = [{ value = "monday", label = "Monday" }, { value = "sunday", label = "Sunday" }]
+
+[[widget.setting]]
+key = "week_numbers"
+kind = "toggle"
+label = "Week numbers"
+description = "Puts the week of the year, counted as ISO 8601 does, before each row."
+default = false
+
+[[widget.setting]]
+key = "calendars"
+kind = "list"
+label = "Calendars"
+description = "iCalendar files by their path, and feeds by an https:// or webcal:// address."
+
+# Text and output on a bar.
+
+[[widget]]
+name = "label"
+
+[[widget.setting]]
+key = "icon"
+kind = "text"
+label = "Icon"
+description = "A character of the icon font, shown before the text."
+
+[[widget.setting]]
+key = "text"
+kind = "text"
+label = "Text"
+description = "What the label says."
+
+[[widget]]
+name = "command"
+
+[[widget.setting]]
+key = "command"
+kind = "list"
+label = "Command"
+description = "The program to run and its arguments; the first line it prints is shown."
+
+[[widget.setting]]
+key = "interval"
+kind = "number"
+label = "Interval"
+description = "How many seconds pass between two runs."
+default = 10
+min = 1
+unit = "s"
+
+[[widget.setting]]
+key = "icon"
+kind = "text"
+label = "Icon"
+description = "A character of the icon font, shown before the text."
+
+[[widget]]
+name = "focused"
+
+[[widget.setting]]
+key = "show"
+kind = "choice"
+label = "Shows"
+description = "The title of the window in front, or the name of its program."
+default = "title"
+choices = [{ value = "title", label = "Title" }, { value = "program", label = "Program" }]
+
+[[widget.setting]]
+key = "width"
+kind = "number"
+label = "Width"
+description = "The most room the text takes."
+default = 260
+min = 0
+unit = "px"
+
+[[widget]]
+name = "spacer"
+
+[[widget.setting]]
+key = "flexible"
+kind = "toggle"
+label = "Flexible"
+description = "Takes the room its slot leaves instead of a size of its own."
+default = false
+
+[[widget.setting]]
+key = "size"
+kind = "number"
+label = "Size"
+description = "The room it keeps."
+default = 12
+min = 0
+max = 2000
+unit = "px"
+visible_if = { key = "flexible", equals = false }
+
+[[widget]]
+name = "files"
+
+[[widget.setting]]
+key = "folder"
+kind = "path"
+pick = "folder"
+label = "Folder"
+description = "The folder a click opens; the start of the file manager without it."
+
+# Connections.
+
+[[widget]]
+name = "network"
+
+[[widget.setting]]
+key = "show"
+kind = "choice"
+label = "Shows"
+description = "The name of the connection beside its icon, or the icon alone."
+default = "name"
+choices = [{ value = "name", label = "Name" }, { value = "icon", label = "Icon" }]
+
+[[widget]]
+name = "radio-switch"
+
+[[widget.setting]]
+key = "radio"
+kind = "choice"
+label = "Radio"
+description = "The radio it switches."
+default = "wifi"
+choices = [{ value = "wifi", label = "Wi-Fi" }, { value = "bluetooth", label = "Bluetooth" }]
+
+[[widget]]
+name = "hotspot-details"
+
+[[widget.setting]]
+key = "qr"
+kind = "toggle"
+label = "QR code"
+description = "A code a phone camera joins the network with, while the password is shown."
+default = true
+
+# The tiles of the quick settings. `detail` is read of every tile in the
+# grid; written as a table it names a widget with options, which is set in
+# the file.
+
+[[widget]]
+name = "tiles"
+
+[[widget.setting]]
+key = "tiles"
+kind = "list"
+label = "Tiles"
+description = "The tiles, by widget name; a tile with options of its own is written in the file."
+
+[[widget.setting]]
+key = "columns"
+kind = "number"
+label = "Columns"
+description = "How many stand in a row."
+default = 2
+min = 1
+max = 4
+
+[[widget]]
+name = "radio-tile"
+
+[[widget.setting]]
+key = "radio"
+kind = "choice"
+label = "Radio"
+description = "The radio it switches."
+default = "wifi"
+choices = [{ value = "wifi", label = "Wi-Fi" }, { value = "bluetooth", label = "Bluetooth" }]
+
+[[widget.setting]]
+key = "detail"
+kind = "text"
+label = "Details"
+description = "The widget its narrow button unfolds; empty for none."
+optional = true
+
+[[widget]]
+name = "airplane"
+
+[[widget.setting]]
+key = "detail"
+kind = "text"
+label = "Details"
+description = "The widget its narrow button unfolds; empty for none."
+optional = true
+
+[[widget]]
+name = "hotspot"
+
+[[widget.setting]]
+key = "detail"
+kind = "text"
+label = "Details"
+description = "The widget its narrow button unfolds; empty for none."
+optional = true
+
+[[widget]]
+name = "power-mode"
+
+[[widget.setting]]
+key = "detail"
+kind = "text"
+label = "Details"
+description = "The widget its narrow button unfolds; empty for none."
+optional = true
+
+[[widget]]
+name = "night-light"
+
+[[widget.setting]]
+key = "detail"
+kind = "text"
+label = "Details"
+description = "The widget its narrow button unfolds; empty for none."
+optional = true
+
+[[widget]]
+name = "inhibit"
+
+[[widget.setting]]
+key = "detail"
+kind = "text"
+label = "Details"
+description = "The widget its narrow button unfolds; empty for none."
+optional = true
+
+[[widget]]
+name = "performance"
+
+[[widget.setting]]
+key = "detail"
+kind = "text"
+label = "Details"
+description = "The widget its narrow button unfolds; empty for none."
+optional = true
+
+[[widget]]
+name = "plan"
+
+[[widget.setting]]
+key = "name"
+kind = "toggle"
+label = "Name"
+description = "The name of the plan beside its icon."
+default = true
+
+[[widget.setting]]
+key = "cycle"
+kind = "toggle"
+label = "Cycle"
+description = "A click puts the next plan in use, as well as opening the list."
+default = false
+
+# Sound, brightness and media.
+
+[[widget]]
+name = "volume"
+
+[[widget.setting]]
+key = "step"
+kind = "number"
+label = "Wheel step"
+description = "How far a notch of the wheel turns the volume."
+default = 2
+min = 1
+max = 25
+unit = "%"
+
+[[widget]]
+name = "brightness"
+
+[[widget.setting]]
+key = "step"
+kind = "number"
+label = "Wheel step"
+description = "How far a notch of the wheel changes the brightness."
+default = 5
+min = 1
+max = 25
+unit = "%"
+
+[[widget]]
+name = "media"
+
+[[widget.setting]]
+key = "width"
+kind = "number"
+label = "Width"
+description = "The most room the text takes."
+default = 260
+min = 0
+unit = "px"
+
+[[widget.setting]]
+key = "step"
+kind = "number"
+label = "Wheel step"
+description = "How far a notch of the wheel turns the volume."
+default = 2
+min = 1
+max = 25
+unit = "%"
+
+[[widget]]
+name = "audio-outputs"
+
+[[widget.setting]]
+key = "volumes"
+kind = "toggle"
+label = "Volumes"
+description = "A slider of the volume under each device."
+default = false
+
+[[widget]]
+name = "audio-inputs"
+
+[[widget.setting]]
+key = "volumes"
+kind = "toggle"
+label = "Volumes"
+description = "A slider of the volume under each device."
+default = true
+
+# The notification area.
+
+[[widget]]
+name = "tray"
+
+[[widget.setting]]
+key = "tips"
+kind = "toggle"
+label = "Descriptions under the pointer"
+description = "Shows the description of an icon while the pointer rests on it."
+default = true
+
+[[widget.setting]]
+key = "limit"
+kind = "number"
+label = "Icons shown"
+description = "How many icons stand on the bar; the others wait in the overflow."
+min = 0
+optional = true
+unset_label = "All"
+
+[[widget.setting]]
+key = "bluetooth"
+kind = "toggle"
+label = "Bluetooth"
+description = "Keeps the Bluetooth icon of Windows among the icons."
+default = false
+
+# The Start menu.
+
+[[widget]]
+name = "apps"
+
+[[widget.setting]]
+key = "pinned"
+kind = "list"
+label = "Pinned"
+description = "The applications pinned to Start, by name or path."
+
+[[widget.setting]]
+key = "columns"
+kind = "number"
+label = "Columns"
+description = "How many stand in a row."
+default = 5
+min = 1
+max = 12
+
+[[widget]]
+name = "recommended"
+
+[[widget.setting]]
+key = "shown"
+kind = "number"
+label = "Entries shown"
+description = "The most entries listed."
+default = 6
+min = 1
+max = 24
+
+[[widget.setting]]
+key = "columns"
+kind = "number"
+label = "Columns"
+description = "How many stand in a row."
+default = 2
+min = 1
+max = 4
+
+[[widget.setting]]
+key = "days"
+kind = "number"
+label = "Days"
+description = "For how many days an application counts as new after its shortcut was made."
+default = 7
+min = 1
+max = 90
+
+[[widget.setting]]
+key = "files"
+kind = "toggle"
+label = "Files"
+description = "Lists the files opened lately."
+default = true
+
+[[widget.setting]]
+key = "apps"
+kind = "toggle"
+label = "New applications"
+description = "Lists the applications installed lately."
+default = true
+
+[[widget]]
+name = "power"
+
+[[widget.setting]]
+key = "actions"
+kind = "list"
+label = "Buttons"
+description = "What the buttons do, in order."
+default = ["lock", "sleep", "sign-out", "restart", "shut-down"]
+choices = [
+    { value = "lock", label = "Lock" },
+    { value = "switch-user", label = "Switch user" },
+    { value = "sleep", label = "Sleep" },
+    { value = "hibernate", label = "Hibernate" },
+    { value = "sign-out", label = "Sign out" },
+    { value = "update-restart", label = "Update and restart" },
+    { value = "restart", label = "Restart" },
+    { value = "update-shut-down", label = "Update and shut down" },
+    { value = "shut-down", label = "Shut down" },
+]
+
+[[widget.setting]]
+key = "updates"
+kind = "toggle"
+label = "Updates"
+description = "Adds installing the updates beside restarting and shutting down while updates wait."
+default = true
+
+[[widget]]
+name = "user"
+
+[[widget.setting]]
+key = "name"
+kind = "toggle"
+label = "Name"
+description = "The name of the account beside its picture."
+default = true
+
+[[widget]]
+name = "places"
+
+[[widget.setting]]
+key = "show"
+kind = "list"
+label = "Places"
+description = "The folders listed, in order."
+default = ["documents", "downloads", "pictures", "music", "videos"]
+choices = [
+    { value = "home", label = "Home" },
+    { value = "desktop", label = "Desktop" },
+    { value = "documents", label = "Documents" },
+    { value = "downloads", label = "Downloads" },
+    { value = "pictures", label = "Pictures" },
+    { value = "music", label = "Music" },
+    { value = "videos", label = "Videos" },
+]
+
+# The launcher and the runner. The runners, their order and the history are
+# also on the Search page of the settings.
+
+[[widget]]
+name = "launcher"
+
+[[widget.setting]]
+key = "placeholder"
+kind = "text"
+label = "Placeholder"
+description = "What the empty field says."
+
+[[widget.setting]]
+key = "folders"
+kind = "list"
+label = "Folders"
+description = "Folders searched for files by name, instead of the index of Windows Search."
+
+[[widget.setting]]
+key = "view"
+kind = "choice"
+label = "View"
+description = "What is shown before anything is typed."
+default = "all"
+choices = [
+    { value = "all", label = "All apps" },
+    { value = "list", label = "List" },
+    { value = "favorites", label = "Favorites" },
+    { value = "categories", label = "Categories" },
+]
+
+[[widget.setting]]
+key = "tabs"
+kind = "toggle"
+label = "Tabs"
+description = "A row of tabs above the list; there for the favorites and the categories unless switched off."
+optional = true
+
+[[widget.setting]]
+key = "runners"
+kind = "list"
+label = "Runners"
+description = "The runners asked, by name; all of them without the option."
+
+[[widget.setting]]
+key = "engine"
+kind = "text"
+label = "Search engine"
+description = "The keyword of the web search the last row searches with."
+default = "ddg"
+
+[[widget.setting]]
+key = "currency"
+kind = "toggle"
+label = "Exchange rates"
+description = "Fetches the rates of the European Central Bank for conversions between currencies."
+default = true
+
+[[widget.setting]]
+key = "recent"
+kind = "toggle"
+label = "Recent documents"
+description = "Lists the documents opened lately while nothing is typed."
+default = false
+
+[[widget.setting]]
+key = "settings"
+kind = "toggle"
+label = "Settings pages"
+description = "Offers the pages of the Settings app and the Control Panel."
+default = true
+
+[[widget]]
+name = "runner"
+
+[[widget.setting]]
+key = "placeholder"
+kind = "text"
+label = "Placeholder"
+description = "What the empty field says."
+
+[[widget.setting]]
+key = "folders"
+kind = "list"
+label = "Folders"
+description = "Folders searched for files by name, instead of the index of Windows Search."
+
+[[widget.setting]]
+key = "runners"
+kind = "list"
+label = "Runners"
+description = "The runners asked, by name; all of them without the option."
+
+[[widget.setting]]
+key = "engine"
+kind = "text"
+label = "Search engine"
+description = "The keyword of the web search the last row searches with."
+default = "ddg"
+
+[[widget.setting]]
+key = "currency"
+kind = "toggle"
+label = "Exchange rates"
+description = "Fetches the rates of the European Central Bank for conversions between currencies."
+default = true
+
+[[widget.setting]]
+key = "recent"
+kind = "toggle"
+label = "Recent documents"
+description = "Lists the documents opened lately while nothing is typed."
+default = true
+
+[[widget.setting]]
+key = "settings"
+kind = "toggle"
+label = "Settings pages"
+description = "Offers the pages of the Settings app and the Control Panel."
+default = true
+
+# The meters. `style` is the face of the meter; the shared styles of a
+# theme are `theme_style`, which every widget takes.
+
+[[widget]]
+name = "cpu"
+
+[[widget.setting]]
+key = "style"
+kind = "choice"
+label = "Style"
+description = "A wave that fills up to the level, or the level as text."
+default = "wave"
+choices = [{ value = "wave", label = "Wave" }, { value = "text", label = "Text" }]
+
+[[widget.setting]]
+key = "interval"
+kind = "number"
+label = "Interval"
+description = "How many seconds pass between two readings; those of [system] where it is not set."
+min = 1
+max = 60
+unit = "s"
+optional = true
+
+[[widget]]
+name = "memory"
+
+[[widget.setting]]
+key = "show"
+kind = "choice"
+label = "Shows"
+description = "The share of the memory in use, or how much is in use."
+default = "percent"
+choices = [{ value = "percent", label = "Percent" }, { value = "used", label = "Gigabytes" }]
+
+[[widget.setting]]
+key = "style"
+kind = "choice"
+label = "Style"
+description = "A wave that fills up to the level, or the level as text."
+default = "wave"
+choices = [{ value = "wave", label = "Wave" }, { value = "text", label = "Text" }]
+
+[[widget.setting]]
+key = "interval"
+kind = "number"
+label = "Interval"
+description = "How many seconds pass between two readings; those of [system] where it is not set."
+min = 1
+max = 60
+unit = "s"
+optional = true
+
+[[widget]]
+name = "battery"
+
+[[widget.setting]]
+key = "style"
+kind = "choice"
+label = "Style"
+description = "A wave that fills up to the level, or the level as text."
+default = "wave"
+choices = [{ value = "wave", label = "Wave" }, { value = "text", label = "Text" }]
+
+[[widget.setting]]
+key = "interval"
+kind = "number"
+label = "Interval"
+description = "How many seconds pass between two readings; those of [system] where it is not set."
+min = 1
+max = 60
+unit = "s"
+optional = true
+
+[[widget]]
+name = "disk"
+
+[[widget.setting]]
+key = "drive"
+kind = "text"
+label = "Drive"
+description = "The drive measured, as C:\\."
+default = "C:\\"
+
+[[widget.setting]]
+key = "show"
+kind = "choice"
+label = "Shows"
+description = "The share of the drive in use, or the space that is free."
+default = "percent"
+choices = [{ value = "percent", label = "Percent" }, { value = "free", label = "Free space" }]
+
+[[widget.setting]]
+key = "style"
+kind = "choice"
+label = "Style"
+description = "A wave that fills up to the level, or the level as text."
+default = "wave"
+choices = [{ value = "wave", label = "Wave" }, { value = "text", label = "Text" }]
+
+[[widget.setting]]
+key = "interval"
+kind = "number"
+label = "Interval"
+description = "How many seconds pass between two readings; those of [system] where it is not set."
+min = 1
+max = 60
+unit = "s"
+optional = true
+
+[[widget]]
+name = "gpu"
+
+[[widget.setting]]
+key = "show"
+kind = "choice"
+label = "Shows"
+description = "How busy the graphics processor is, or how much of its memory is in use."
+default = "percent"
+choices = [{ value = "percent", label = "Percent" }, { value = "memory", label = "Memory" }]
+
+[[widget.setting]]
+key = "style"
+kind = "choice"
+label = "Style"
+description = "A wave that fills up to the level, or the level as text."
+default = "wave"
+choices = [{ value = "wave", label = "Wave" }, { value = "text", label = "Text" }]
+
+[[widget.setting]]
+key = "interval"
+kind = "number"
+label = "Interval"
+description = "How many seconds pass between two readings; those of [system] where it is not set."
+min = 1
+max = 60
+unit = "s"
+optional = true
+
+[[widget]]
+name = "network-meter"
+
+[[widget.setting]]
+key = "megabits"
+kind = "number"
+label = "Full speed"
+description = "The speed, in megabits a second, at which the meter is full."
+default = 100
+min = 1
+unit = "Mbit/s"
+
+[[widget.setting]]
+key = "style"
+kind = "choice"
+label = "Style"
+description = "A wave that fills up to the level, or the level as text."
+default = "wave"
+choices = [{ value = "wave", label = "Wave" }, { value = "text", label = "Text" }]
+
+[[widget.setting]]
+key = "interval"
+kind = "number"
+label = "Interval"
+description = "How many seconds pass between two readings; those of [system] where it is not set."
+min = 1
+max = 60
+unit = "s"
+optional = true
+
+# Updates and the marketplace.
+
+[[widget]]
+name = "update"
+
+[[widget.setting]]
+key = "repository"
+kind = "text"
+label = "Repository"
+description = "The address on GitHub whose releases are looked for; Tessera's own without it."
+
+[[widget.setting]]
+key = "hours"
+kind = "number"
+label = "Check every"
+description = "How many hours pass between two checks."
+default = 24
+min = 1
+unit = "h"
+
+[[widget.setting]]
+key = "previews"
+kind = "toggle"
+label = "Previews"
+description = "A release marked as a preview counts too."
+default = false
+
+[[widget.setting]]
+key = "install"
+kind = "toggle"
+label = "Install on click"
+description = "A click installs the release instead of opening its page."
+default = false
+
+[[widget]]
+name = "marketplace"
+
+[[widget.setting]]
+key = "show"
+kind = "list"
+label = "Shows"
+description = "The kinds offered; every kind without the option."
+choices = [
+    { value = "extensions", label = "Extensions" },
+    { value = "themes", label = "Themes" },
+    { value = "icon-packs", label = "Icon packs" },
+    { value = "wallpapers", label = "Wallpapers" },
+    { value = "tiling-layouts", label = "Tiling layouts" },
+]
+
+[[widget.setting]]
+key = "columns"
+kind = "number"
+label = "Columns"
+description = "How many stand in a row."
+default = 1
+min = 1
+max = 4
+
+# The dock. Its `sort` is declared by dock-pins.
+
+[[widget]]
+name = "windows"
+
+[[widget.setting]]
+key = "pinned"
+kind = "list"
+label = "Pinned"
+description = "Applications that keep a button whether they run or not, by name or path."
+
+[[widget.setting]]
+key = "start"
+kind = "text"
+label = "Start button"
+description = "The popup the button at the start of the dock opens; no button without it."
+
+[[widget.setting]]
+key = "start-icon"
+kind = "text"
+label = "Start button icon"
+description = "A character of the icon font on the Start button instead of the mark of Tessera."
+
+[[widget.setting]]
+key = "group"
+kind = "choice"
+label = "Grouping"
+description = "Whether the windows of one application share a button."
+default = "always"
+choices = [{ value = "always", label = "Always" }, { value = "never", label = "Never" }]
+
+[[widget.setting]]
+key = "labels"
+kind = "toggle"
+label = "Titles on the buttons"
+description = "Each button shows the title of its window beside the icon."
+default = false
+
+[[widget.setting]]
+key = "counter"
+kind = "toggle"
+label = "Count the windows"
+description = "The number of windows beside the dot instead of more dots."
+default = false
+
+[[widget.setting]]
+key = "show"
+kind = "choice"
+label = "Shows"
+description = "Which windows get buttons."
+default = "display"
+choices = [
+    { value = "display", label = "This display" },
+    { value = "all", label = "All displays" },
+    { value = "workspace", label = "This workspace" },
+    { value = "minimized", label = "Minimized windows" },
+]
+
+[[widget.setting]]
+key = "all_displays"
+kind = "toggle"
+label = "Windows of every display"
+description = "Lists the windows of every display, as showing those of all displays does."
+default = false
+
+[[widget.setting]]
+key = "middle"
+kind = "choice"
+label = "Middle click"
+description = "What a click with the middle button on a button does."
+default = "new"
+choices = [{ value = "new", label = "New window" }, { value = "close", label = "Close" }]
+
+[[widget.setting]]
+key = "wheel"
+kind = "toggle"
+label = "Wheel through windows"
+description = "The wheel over a button brings its windows forward one after the other."
+default = false
+
+[[widget.setting]]
+key = "reveal_on_attention"
+kind = "choice"
+label = "Shown for attention"
+description = "When a dock that hides comes out for a window that asks for attention."
+default = "while_flashing"
+choices = [
+    { value = "while_flashing", label = "While it flashes" },
+    { value = "until_activated", label = "Until it is activated" },
+    { value = "never", label = "Never" },
+]
+
+[[widget.setting]]
+key = "badges"
+kind = "toggle"
+label = "Badges"
+description = "The buttons count the notifications that wait."
+default = true
