@@ -4,31 +4,43 @@
 //! Banners: a notification that arrives is shown for a few seconds in a
 //! corner of a display, unless banners are held back by do not disturb.
 //!
-//! Windows tells a program like this one about notifications only through
-//! the list of its notification center, which the notification store
-//! reads every two seconds, so a banner may come that much after the
-//! notification. Windows shows a banner of its own as well unless it is
-//! told not to in its settings.
+//! Windows tells a program like this one about notifications through the
+//! list of its notification center, which the notification store reads
+//! every two seconds and whenever Windows tells of a change, so a banner
+//! may come that much after the notification. Beside Explorer, Windows
+//! shows a banner of its own, which is why `banners` is off there unless
+//! the configuration says otherwise; as the shell, there is no other.
+//!
+//! A banner of a notification whose toast was read from Windows'
+//! notification database draws it whole: its logo, the wide picture at
+//! the top, the picture in the content, progress bars, input fields and
+//! up to five buttons, which do what the application asked for (see
+//! [`NotificationStore::activate`]). A reminder, an alarm and a call stay
+//! until they are answered. Where Tessera is the shell, a banner plays the
+//! sound of its toast, as the sound scheme of Windows has it.
 //!
 //! Do not disturb holds while it is switched on (`quiet = true`, which
 //! the moon button and the `focus` widget write), until a time chosen in
 //! the list of notifications, while `schedule` says so, and while the user
 //! is busy in one of the ways `quiet_when` names. The banners of an
 //! application a `[[notification_rule]]` gives `priority = true` come all
-//! the same, and so do urgent notices of Tessera itself.
+//! the same, and so do urgent notices of Tessera itself. Under
+//! `follow_windows`, do not disturb also holds while Windows' own does, and
+//! the applications Windows gives the priority it calls Top come through.
 //!
 //! Other parts of Tessera post notices of their own with
 //! [`Banners::post`]: they are listed with the others, and their banners
-//! can carry buttons, which those of Windows cannot, as Windows does not
-//! tell what the buttons of a notification are.
+//! carry the buttons they bring.
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{
     Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, TimeZone, Timelike, Weekday,
 };
+use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AsyncApp, Context, CursorStyle, FontWeight, Global, InteractiveElement,
     IntoElement, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled,
@@ -39,11 +51,13 @@ use serde::Deserialize;
 use crate::config::edit::ConfigFile;
 use crate::icons::Icon;
 use crate::motion::{Interaction, Spring};
-use crate::notifications_store::{NotificationStore, unix_now};
-use crate::platform::{NativeSurface, Occupation, ScreenRect};
+use crate::notifications_store::{NotificationStore, Press, sound_file, unix_now};
+use crate::platform::{NativeSurface, Occupation, QuietProfile, ScreenRect, shell_mode};
 use crate::popup::{MARGIN, open_floating, retire_floating};
 use crate::shell::Shell;
 use crate::theme::Theme;
+use crate::toast::{Scenario, Toast};
+use crate::toast_view::{self, OnPress, ToastControls, ToastPress};
 use crate::ui::{icon, one_line, release_hover, state_layer};
 
 /// How often the time the banners have left is counted down.
@@ -65,6 +79,10 @@ const TRAVEL: f32 = 48.;
 /// newer ones.
 const STACK: usize = 4;
 const STACK_RANGE: (usize, usize) = (1, 8);
+
+/// The seconds the banner of a toast that asks to stay long
+/// (`duration="long"`) stays, as Windows has it.
+const LONG_STAY: Duration = Duration::from_secs(25);
 
 /// The seconds a banner stays unless the configuration says otherwise,
 /// and the fewest and the most it may say.
@@ -219,6 +237,33 @@ pub struct NotificationsConfig {
     quiet_when: Option<Vec<Occupation>>,
     /// When do not disturb holds each day.
     schedule: Option<QuietSchedule>,
+    /// Whether the jobs on files show their progress in the notification
+    /// center, which lets the file operations leave out the progress
+    /// window of the Shell.
+    #[serde(default)]
+    jobs: bool,
+    /// Whether do not disturb follows Windows' own, and the settings of
+    /// Windows for each application are heeded; without the key, only
+    /// beside Explorer.
+    follow_windows: Option<bool>,
+    /// Whether banners play the sounds of their notifications, where
+    /// Tessera is the shell (beside Explorer, Windows plays them).
+    #[serde(default)]
+    sounds: Sounds,
+    /// Whether pictures of notifications that are on the web are fetched.
+    #[serde(default)]
+    web_images: bool,
+}
+
+/// Whether banners play sounds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Sounds {
+    /// The sounds of the notifications, from the sound scheme of Windows.
+    #[default]
+    Windows,
+    /// None.
+    Off,
 }
 
 impl NotificationsConfig {
@@ -242,6 +287,27 @@ impl NotificationsConfig {
     /// How many notifications that left the notification center are kept.
     pub fn history(&self) -> usize {
         self.history.unwrap_or(HISTORY).min(HISTORY_MOST)
+    }
+
+    /// Whether the jobs on files are shown.
+    pub fn jobs(&self) -> bool {
+        self.jobs
+    }
+
+    /// Whether Windows' do not disturb and its settings of the
+    /// applications are followed.
+    pub fn follow_windows(&self) -> bool {
+        self.follow_windows.unwrap_or_else(|| !shell_mode())
+    }
+
+    /// Whether banners play sounds: as asked, and only as the shell.
+    pub fn sounds(&self) -> bool {
+        self.sounds == Sounds::Windows && shell_mode()
+    }
+
+    /// Whether pictures on the web are fetched.
+    pub fn web_images(&self) -> bool {
+        self.web_images
     }
 
     /// The kinds of being busy that hold banners back.
@@ -275,13 +341,17 @@ pub enum Hush {
     Scheduled(NaiveDateTime),
     /// The user is busy so.
     Busy(Occupation),
+    /// Windows' own do not disturb holds, letting this through.
+    Windows(QuietProfile),
 }
 
 /// The reasons do not disturb holds by itself at `now`, where `config`
-/// asks for them: the schedule, and the user being busy with `occupation`.
+/// asks for them: the schedule, the user being busy with `occupation`, and
+/// Windows' own do not disturb as `windows` has it, where it is followed.
 fn automatic(
     config: &NotificationsConfig,
     occupation: Option<Occupation>,
+    windows: Option<QuietProfile>,
     now: NaiveDateTime,
 ) -> impl Iterator<Item = Hush> {
     let scheduled = { config.schedule.as_ref() }
@@ -289,7 +359,8 @@ fn automatic(
         .map(Hush::Scheduled);
     let busy = { occupation.filter(|occupation| config.quiet_when().contains(occupation)) }
         .map(Hush::Busy);
-    scheduled.into_iter().chain(busy)
+    let windows = { windows.filter(|profile| profile.holds()) }.map(Hush::Windows);
+    scheduled.into_iter().chain(busy).chain(windows)
 }
 
 /// Why do not disturb holds at `now` (the same moment as `now_unix`, in
@@ -301,6 +372,7 @@ fn hush_of(
     config: &NotificationsConfig,
     until: Option<i64>,
     occupation: Option<Occupation>,
+    windows: Option<QuietProfile>,
     released: &[Hush],
     now: NaiveDateTime,
     now_unix: i64,
@@ -311,7 +383,7 @@ fn hush_of(
     if let Some(until) = until.filter(|&until| until > now_unix) {
         return Some(Hush::Until(until));
     }
-    automatic(config, occupation, now).find(|hush| !released.contains(hush))
+    automatic(config, occupation, windows, now).find(|hush| !released.contains(hush))
 }
 
 /// How long do not disturb is switched on for.
@@ -460,6 +532,10 @@ struct BannerItem {
     picture: Icon,
     actions: Vec<NoticeAction>,
     on_gone: OnGone,
+    /// The toast of a notification of Windows, where it was read.
+    toast: Option<Arc<Toast>>,
+    /// How long it stays.
+    stay: Duration,
 }
 
 /// The banners and do not disturb.
@@ -493,6 +569,7 @@ impl Banners {
             &this.config,
             store.and_then(NotificationStore::quiet_until),
             store.and_then(NotificationStore::occupation),
+            store.and_then(NotificationStore::windows_quiet),
             &this.released,
             now.naive_local(),
             now.timestamp(),
@@ -518,9 +595,11 @@ impl Banners {
         let quiet = cx.default_global::<Self>().config.quiet;
         if choice == FocusChoice::Off {
             // What holds it by itself now is let go of until it ends.
-            let occupation =
-                { cx.try_global::<NotificationStore>() }.and_then(NotificationStore::occupation);
-            let released = automatic(&cx.global::<Self>().config, occupation, now).collect();
+            let store = cx.try_global::<NotificationStore>();
+            let occupation = store.and_then(NotificationStore::occupation);
+            let windows = store.and_then(NotificationStore::windows_quiet);
+            let released =
+                automatic(&cx.global::<Self>().config, occupation, windows, now).collect();
             cx.global_mut::<Self>().released = released;
         }
         let wanted = choice == FocusChoice::On;
@@ -568,14 +647,18 @@ impl Banners {
             return;
         };
         let stay = this.config.stay();
+        let sounds = this.config.sounds();
         let hush = Self::hush(cx);
         let store = cx.global::<NotificationStore>();
         let items: Vec<BannerItem> = { arrived.iter() }
             .filter_map(|key| store.entry(*key))
             .filter(|entry| {
                 let rule = store.rule(entry);
-                let muted = rule.is_some_and(|rule| !rule.banners);
-                let priority = rule.is_some_and(|rule| rule.priority);
+                let windows = store.app_settings(&entry.app_id);
+                let muted = rule.is_some_and(|rule| !rule.banners) || !windows.banners;
+                let scenario = entry.toast.as_ref().map(|toast| toast.scenario);
+                let priority = rule.is_some_and(|rule| rule.priority)
+                    || breaks_through(hush, windows.top_priority, scenario);
                 !muted && (hush.is_none() || priority)
             })
             .map(|entry| BannerItem {
@@ -589,9 +672,18 @@ impl Banners {
                 picture: None,
                 actions: Vec::new(),
                 on_gone: OnGone::default(),
+                stay: stay_of(entry.toast.as_deref(), stay),
+                toast: entry.toast.clone(),
             })
             .collect();
-        Self::show(items, stay, cx);
+        let sound = { items.first() }
+            .filter(|item| sounds && store.app_settings(&item.app_id).sound)
+            .map(|item| (item.toast.clone(), item.app_id.clone()));
+        if Self::show(items, cx)
+            && let Some((toast, app_id)) = sound
+        {
+            play(toast, app_id, cx);
+        }
     }
 
     /// Posts `notice`: it is listed with the notifications, and comes as a
@@ -617,6 +709,7 @@ impl Banners {
             true => Duration::MAX,
             false => cx.global::<Self>().config.stay(),
         };
+        let sounds = cx.global::<Self>().config.sounds();
         let item = BannerItem {
             key,
             windows: false,
@@ -628,8 +721,13 @@ impl Banners {
             picture,
             actions,
             on_gone,
+            toast: None,
+            stay,
         };
-        let shown = Self::show(vec![item], stay, cx);
+        let shown = Self::show(vec![item], cx);
+        if shown && sounds {
+            play(None, String::new(), cx);
+        }
         Posted { key, shown }
     }
 
@@ -644,26 +742,26 @@ impl Banners {
     /// Shows `items` above the banners there are, opening the window of
     /// the banners if it is not open. `false` where they could not be
     /// shown.
-    fn show(items: Vec<BannerItem>, stay: Duration, cx: &mut App) -> bool {
+    fn show(items: Vec<BannerItem>, cx: &mut App) -> bool {
         if items.is_empty() {
             return false;
         }
         let stack = cx.global::<Self>().config.stack();
         if let Some(open) = cx.global::<Self>().open {
             let shown = open.update(cx, |view, window, cx| {
-                view.show(items.clone(), stay, stack, window, cx)
+                view.show(items.clone(), stack, window, cx)
             });
             if matches!(shown, Ok(true)) {
                 return true;
             }
         }
-        Self::open(items, stay, stack, cx)
+        Self::open(items, stack, cx)
     }
 
     /// Opens the window of the banners with `items` in it, in the corner
     /// the configuration names of what the bars leave of the display the
     /// pointer is on. `false` where it did not open.
-    fn open(items: Vec<BannerItem>, stay: Duration, stack: usize, cx: &mut App) -> bool {
+    fn open(items: Vec<BannerItem>, stack: usize, cx: &mut App) -> bool {
         let Some(anchor) = Shell::middle_anchor(cx) else {
             report!("the banners have nowhere to open");
             return false;
@@ -674,7 +772,8 @@ impl Banners {
             area: area.unwrap_or(anchor.screen),
             scale: anchor.scale,
         };
-        let height = slots(items.iter().take(stack));
+        let theme = *cx.global::<Theme>();
+        let height = slots(items.iter().take(stack), &theme);
         let frame = hanging.frame(height);
         let rough = gpui::Bounds {
             origin: point(
@@ -693,7 +792,7 @@ impl Banners {
             if let Err(error) = adopted {
                 report!("the banners are not where they belong: {error:#}");
             }
-            BannerView::new(items, stay, stack, hanging, cx)
+            BannerView::new(items, stack, hanging, cx)
         });
         match opened {
             Ok(window) => {
@@ -709,19 +808,58 @@ impl Banners {
 }
 
 /// The height of the places of `items`, in logical pixels.
-fn slots<'a>(items: impl Iterator<Item = &'a BannerItem>) -> f32 {
-    items.map(BannerItem::slot).sum::<f32>().max(SLOT)
+fn slots<'a>(items: impl Iterator<Item = &'a BannerItem>, theme: &Theme) -> f32 {
+    items.map(|item| item.slot(theme)).sum::<f32>().max(SLOT)
 }
 
 impl BannerItem {
     /// The height of its place, the gap below it included.
-    fn slot(&self) -> f32 {
+    fn slot(&self, theme: &Theme) -> f32 {
+        if let Some(toast) = &self.toast {
+            return SLOT + f32::from(toast_view::extra_height(toast, theme));
+        }
         if self.actions.is_empty() {
             SLOT
         } else {
             SLOT + BUTTON_ROW
         }
     }
+}
+
+/// How long the banner of `toast` stays where banners stay `stay`: until
+/// it is answered for a reminder, an alarm or a call, and longer where
+/// the toast asks for it.
+fn stay_of(toast: Option<&Toast>, stay: Duration) -> Duration {
+    match toast {
+        Some(toast) if toast.scenario.stays() => Duration::MAX,
+        Some(toast) if toast.long => stay.max(LONG_STAY),
+        _ => stay,
+    }
+}
+
+/// Whether a banner comes while do not disturb holds as `hush` says: an
+/// application Windows gives the priority it calls Top comes through
+/// Windows' own do not disturb unless it lets alarms only through, and an
+/// alarm, a reminder or a call comes through it always, as Windows has it.
+fn breaks_through(hush: Option<Hush>, top_priority: bool, scenario: Option<Scenario>) -> bool {
+    let alarm = scenario.is_some_and(Scenario::stays);
+    match hush {
+        Some(Hush::Windows(QuietProfile::PriorityOnly)) => top_priority || alarm,
+        Some(Hush::Windows(QuietProfile::AlarmsOnly)) => alarm,
+        _ => false,
+    }
+}
+
+/// Plays the sound of a banner of `toast` of the application `app_id`
+/// (none: a notice of Tessera's own), away from the user interface.
+fn play(toast: Option<Arc<Toast>>, app_id: String, cx: &mut App) {
+    cx.background_executor()
+        .spawn(async move {
+            if let Some((file, looping)) = sound_file(toast.as_deref(), &app_id) {
+                crate::platform::NotificationSound::play(&file, looping);
+            }
+        })
+        .detach();
 }
 
 /// Where on a display the banners hang: the corner, the area of the
@@ -774,6 +912,10 @@ struct Banner {
     close: Interaction,
     /// The pointer feedback of its buttons, in their order.
     buttons: Vec<Interaction>,
+    /// The fields and the choices of its toast.
+    controls: Option<ToastControls>,
+    /// Whether its sound plays again and again until it leaves.
+    looping: bool,
 }
 
 /// The root view of the window of the banners.
@@ -792,13 +934,7 @@ pub struct BannerView {
 }
 
 impl BannerView {
-    fn new(
-        items: Vec<BannerItem>,
-        stay: Duration,
-        stack: usize,
-        hanging: Hanging,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    fn new(items: Vec<BannerItem>, stack: usize, hanging: Hanging, cx: &mut Context<Self>) -> Self {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
                 cx.background_executor().timer(TICK).await;
@@ -812,7 +948,8 @@ impl BannerView {
         // after its banner is shown.
         cx.observe_global::<NotificationStore>(Self::take_logos)
             .detach();
-        let room = slots(items.iter().take(stack));
+        let theme = *cx.global::<Theme>();
+        let room = slots(items.iter().take(stack), &theme);
         let mut this = Self {
             banners: Vec::new(),
             hanging,
@@ -821,7 +958,7 @@ impl BannerView {
             hovered: false,
             gone: false,
         };
-        this.add(items, stay, cx);
+        this.add(items, cx);
         this
     }
 
@@ -830,7 +967,6 @@ impl BannerView {
     fn show(
         &mut self,
         items: Vec<BannerItem>,
-        stay: Duration,
         stack: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -839,12 +975,12 @@ impl BannerView {
             return false;
         }
         self.stack = stack;
-        self.add(items, stay, cx);
-        self.fit(window);
+        self.add(items, cx);
+        self.fit(window, cx);
         true
     }
 
-    fn add(&mut self, items: Vec<BannerItem>, stay: Duration, cx: &mut Context<Self>) {
+    fn add(&mut self, items: Vec<BannerItem>, cx: &mut Context<Self>) {
         let motion = cx.global::<Theme>().motion;
         for item in items {
             let logo = item.picture.clone().or_else(|| {
@@ -854,9 +990,15 @@ impl BannerView {
 
             let mut presence = Spring::new(motion.spatial, 0.);
             presence.animate_to(1.);
+            let controls = { item.toast.clone() }.map(|toast| ToastControls::new(toast, cx));
+            let looping = { item.toast.as_ref() }
+                .is_some_and(|toast| toast.audio.looping && toast.scenario.stays());
+            let stay = item.stay;
             self.banners.insert(
                 0,
                 Banner {
+                    controls,
+                    looping,
                     buttons: item
                         .actions
                         .iter()
@@ -896,11 +1038,12 @@ impl BannerView {
     }
 
     /// Sizes the window for the banners there are.
-    fn fit(&mut self, window: &mut Window) {
+    fn fit(&mut self, window: &mut Window, cx: &App) {
         if self.banners.is_empty() {
             return;
         }
-        let room = slots(self.banners.iter().map(|banner| &banner.item));
+        let theme = *cx.global::<Theme>();
+        let room = slots(self.banners.iter().map(|banner| &banner.item), &theme);
         if room == self.room {
             return;
         }
@@ -962,9 +1105,12 @@ impl BannerView {
             return;
         };
         let item = banner.item.clone();
+        let values = { banner.controls.as_ref() }
+            .map(|controls| controls.values(cx))
+            .unwrap_or_default();
         self.withdraw(key, cx);
         if item.windows {
-            cx.defer(move |cx| NotificationStore::open(key, cx));
+            cx.defer(move |cx| NotificationStore::activate(key, Press::Body, &values, cx));
         } else if let Some(action) = item.actions.first() {
             let run = action.run.clone();
             cx.defer(move |cx| run(cx));
@@ -988,6 +1134,55 @@ impl BannerView {
         cx.defer(move |cx| run(cx));
     }
 
+    /// Does what was pressed on the parts of the toast of the banner `key`.
+    fn press_toast(&mut self, key: u64, press: ToastPress, cx: &mut Context<Self>) {
+        let Some(banner) = self.banner(key) else {
+            return;
+        };
+        let Some(controls) = banner.controls.as_mut() else {
+            return;
+        };
+        match press {
+            ToastPress::Choose { input, choice } => {
+                controls.choose(input, choice);
+                cx.notify();
+            }
+            ToastPress::Action(at) => {
+                let values = controls.values(cx);
+                self.withdraw(key, cx);
+                cx.defer(move |cx| {
+                    NotificationStore::activate(key, Press::Action(at), &values, cx)
+                });
+            }
+        }
+    }
+
+    /// Sends what was typed into a field of the banner `key` where Enter
+    /// was pressed in it.
+    fn key_down(
+        &mut self,
+        key: u64,
+        event: &gpui::KeyDownEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.keystroke.key != "enter" {
+            return;
+        }
+        let Some(controls) = self.banner(key).and_then(|banner| banner.controls.as_ref()) else {
+            return;
+        };
+        let toast = controls.toast().clone();
+        let typed_in = (0..toast.inputs.len()).find(|&input| {
+            controls
+                .field(input)
+                .is_some_and(|field| field.read(cx).is_focused(window))
+        });
+        if let Some(action) = typed_in.and_then(|input| toast_view::send_action(&toast, input)) {
+            self.press_toast(key, ToastPress::Action(action), cx);
+        }
+    }
+
     fn render_banner(
         banner: &mut Banner,
         travel: f32,
@@ -999,13 +1194,36 @@ impl BannerView {
         let item = &banner.item;
         let key = item.key;
         let caption_size = theme.typography.label_size * CAPTION_SHARE;
-        let mark = match banner.logo.clone() {
-            Some(logo) => img(logo).size(LOGO).flex_none().into_any_element(),
-            None => icon(&theme, item.glyph)
+        let toast = item.toast.clone();
+        let override_logo =
+            { toast.as_ref().and_then(|toast| toast.logo.as_ref()) }.and_then(|logo| {
+                let store = cx.try_global::<NotificationStore>()?;
+                Some((store.picture(&item.app_id, &logo.src)?, logo.circle))
+            });
+        let mark = match (override_logo, banner.logo.clone()) {
+            (Some((logo, circle)), _) => {
+                let logo = img(logo).size(LOGO).flex_none();
+                match circle {
+                    true => logo.rounded(theme.shape.full).into_any_element(),
+                    false => logo.into_any_element(),
+                }
+            }
+            (None, Some(logo)) => img(logo).size(LOGO).flex_none().into_any_element(),
+            (None, None) => icon(&theme, item.glyph)
                 .flex_none()
                 .text_size(caption_size)
                 .text_color(theme.colors.primary)
                 .into_any_element(),
+        };
+        let source = { toast.as_ref() }.and_then(|toast| {
+            let header = toast.header.as_ref().map(|header| header.title.clone());
+            header
+                .or_else(|| toast.attribution.clone())
+                .filter(|text| !text.is_empty())
+        });
+        let app_line = match source {
+            Some(source) => format!("{} \u{b7} {source}", item.app),
+            None => item.app.clone(),
         };
         let state = banner.close.state(window);
         let close = icon(&theme, CLOSE_GLYPH)
@@ -1042,7 +1260,7 @@ impl BannerView {
                     .min_w_0()
                     .text_size(caption_size)
                     .text_color(theme.colors.primary)
-                    .child(one_line(item.app.clone())),
+                    .child(one_line(app_line)),
             )
             .child(close);
         let title = (!item.title.is_empty()).then(|| {
@@ -1093,7 +1311,17 @@ impl BannerView {
                 .gap(theme.spacing.small)
                 .children(buttons)
         });
-        let slot = item.slot();
+        let slot = item.slot(&theme);
+        let hero = { toast.as_deref() }
+            .and_then(|toast| toast_view::hero(toast, &item.app_id, &theme, cx));
+        let parts = match &banner.controls {
+            Some(controls) => {
+                let on_press: OnPress<Self> =
+                    Rc::new(move |this: &mut Self, press, _, cx| this.press_toast(key, press, cx));
+                toast_view::parts(key, controls, &item.app_id, None, &theme, on_press, cx)
+            }
+            None => Vec::new(),
+        };
         let card = div()
             .id(("banner", key as usize))
             .relative()
@@ -1105,15 +1333,20 @@ impl BannerView {
             .flex()
             .flex_col()
             .gap(px(2.))
-            .justify_center()
+            .when(toast.is_none(), |card| card.justify_center())
             .overflow_hidden()
             .rounded(theme.shape.large)
             .bg(theme.colors.surface_container_highest)
             .cursor(CursorStyle::PointingHand)
             .on_click(cx.listener(move |this, _, _, cx| this.activate(key, cx)))
+            .on_key_down(
+                cx.listener(move |this, event, window, cx| this.key_down(key, event, window, cx)),
+            )
+            .children(hero)
             .child(header)
             .children(title)
             .children(body)
+            .children(parts)
             .children(button_row);
         // The place includes the gap below the card, so that the cards
         // beside it move smoothly when one comes or goes.
@@ -1132,6 +1365,9 @@ impl Banner {
     fn leave(&mut self) {
         self.leaving = true;
         self.presence.animate_to(0.);
+        if std::mem::take(&mut self.looping) {
+            std::thread::spawn(crate::platform::NotificationSound::stop);
+        }
     }
 }
 
@@ -1165,7 +1401,7 @@ impl Render for BannerView {
                 retire_floating(window, cx);
             }
         } else if after != before {
-            cx.on_next_frame(window, |this, window, _| this.fit(window));
+            cx.on_next_frame(window, |this, window, cx| this.fit(window, cx));
         }
         let column = div()
             .id("banners")
@@ -1188,6 +1424,8 @@ impl Render for BannerView {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     fn at(day: u32, hour: u32, minute: u32) -> NaiveDateTime {
@@ -1316,32 +1554,40 @@ mod tests {
         };
         let busy = Some(Occupation::Game);
         assert_eq!(
-            hush_of(&config(true), None, busy, &[], now, unix),
+            hush_of(&config(true), None, busy, None, &[], now, unix),
             Some(Hush::On)
         );
         assert_eq!(
-            hush_of(&config(false), Some(2_000), busy, &[], now, unix),
+            hush_of(&config(false), Some(2_000), busy, None, &[], now, unix),
             Some(Hush::Until(2_000))
         );
         // A time that has passed holds no more.
         let scheduled = Hush::Scheduled(at(2, 12, 0));
         let game = Hush::Busy(Occupation::Game);
         assert_eq!(
-            hush_of(&config(false), Some(500), busy, &[], now, unix),
+            hush_of(&config(false), Some(500), busy, None, &[], now, unix),
             Some(scheduled)
         );
         // Released, the schedule gives way to what keeps the user busy,
         // and then to nothing.
         assert_eq!(
-            hush_of(&config(false), None, busy, &[scheduled], now, unix),
+            hush_of(&config(false), None, busy, None, &[scheduled], now, unix),
             Some(game)
         );
         assert_eq!(
-            hush_of(&config(false), None, busy, &[scheduled, game], now, unix),
+            hush_of(
+                &config(false),
+                None,
+                busy,
+                None,
+                &[scheduled, game],
+                now,
+                unix
+            ),
             None
         );
         // Switching off releases both.
-        let reasons: Vec<Hush> = automatic(&config(false), busy, now).collect();
+        let reasons: Vec<Hush> = automatic(&config(false), busy, None, now).collect();
         assert_eq!(reasons, [scheduled, game]);
         // Being busy in a way `quiet_when` leaves out does not count.
         let games_only = NotificationsConfig {
@@ -1349,7 +1595,57 @@ mod tests {
             ..Default::default()
         };
         let fullscreen = Some(Occupation::Fullscreen);
-        assert_eq!(hush_of(&games_only, None, fullscreen, &[], now, unix), None);
+        assert_eq!(
+            hush_of(&games_only, None, fullscreen, None, &[], now, unix),
+            None
+        );
+    }
+
+    #[test]
+    fn windows_do_not_disturb_holds_and_lets_through_what_it_lets_through() {
+        let now = at(2, 10, 0);
+        let config = NotificationsConfig::default();
+        let profile = Some(QuietProfile::PriorityOnly);
+        let windows = Hush::Windows(QuietProfile::PriorityOnly);
+        assert_eq!(
+            hush_of(&config, None, None, profile, &[], now, 0),
+            Some(windows)
+        );
+        assert_eq!(
+            hush_of(&config, None, None, Some(QuietProfile::Off), &[], now, 0),
+            None
+        );
+        // Switched off in Tessera, it is let go of until Windows' changes.
+        assert_eq!(
+            hush_of(&config, None, None, profile, &[windows], now, 0),
+            None
+        );
+        assert!(breaks_through(Some(windows), true, None));
+        assert!(!breaks_through(
+            Some(windows),
+            false,
+            Some(Scenario::Default)
+        ));
+        assert!(breaks_through(Some(windows), false, Some(Scenario::Alarm)));
+        let alarms = Some(Hush::Windows(QuietProfile::AlarmsOnly));
+        assert!(!breaks_through(alarms, true, None));
+        assert!(breaks_through(alarms, false, Some(Scenario::IncomingCall)));
+        assert!(!breaks_through(Some(Hush::On), true, Some(Scenario::Alarm)));
+    }
+
+    #[test]
+    fn a_toast_that_asks_to_stay_stays() {
+        let toast = |xml: &str| Toast::parse(xml, &HashMap::new()).unwrap();
+        let six = Duration::from_secs(6);
+        assert_eq!(stay_of(None, six), six);
+        let reminder = toast(
+            r#"<toast scenario="reminder"><visual><binding template="ToastGeneric"><text>a</text></binding></visual></toast>"#,
+        );
+        assert_eq!(stay_of(Some(&reminder), six), Duration::MAX);
+        let long = toast(
+            r#"<toast duration="long"><visual><binding template="ToastGeneric"><text>a</text></binding></visual></toast>"#,
+        );
+        assert_eq!(stay_of(Some(&long), six), LONG_STAY);
     }
 
     #[test]
