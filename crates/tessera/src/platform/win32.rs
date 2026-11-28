@@ -248,6 +248,7 @@ pub use thumbnails::{LARGEST_THUMBNAIL, ThumbnailKind, Thumbnails};
 pub use tile_border::TileBorder;
 pub use touch_keyboard::TouchKeyboard;
 pub use tray::BalloonKind;
+pub use tray::TrayCommand;
 pub use tray::TrayPromotion;
 pub use tray::{Balloon, BalloonEvent};
 pub use tray::{Tray, TrayButton, TrayIcon};

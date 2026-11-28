@@ -267,6 +267,16 @@ impl TaskbarList {
     }
 }
 
+/// The hidden window that takes the calls, while Tessera is the shell of
+/// the session and the window was made.
+pub(super) fn own_band() -> Option<HWND> {
+    if !SHELL.load(Ordering::Relaxed) {
+        return None;
+    }
+    let band = BAND.load(Ordering::SeqCst);
+    (band != 0).then_some(HWND(band as *mut c_void))
+}
+
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

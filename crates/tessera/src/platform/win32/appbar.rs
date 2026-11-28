@@ -22,11 +22,24 @@
 //! look at, and they take their place again when it changed. The work areas are set after the answer was given, from a
 //! message the tray window posts to itself, as setting them tells every
 //! window and waits for them.
+//!
+//! The taskbar, as applications ask for it with `ABM_GETTASKBARPOS` and
+//! `ABM_GETSTATE`, is the first surface of Tessera that takes its edge on
+//! the primary display, or the first that hides there where none takes
+//! its edge. Once chosen it stays the taskbar while its window exists, so
+//! that it is still the taskbar while it hides. A program that asks for
+//! the taskbar to hide or to stay (`ABM_SETSTATE`) is heard on a channel
+//! the shell reads; the shell then has that surface hide or stay for the
+//! rest of the session (taskbar_state.rs), and nothing is written to the
+//! configuration.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::mem::size_of;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use async_channel::{Receiver, Sender};
 
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -40,9 +53,9 @@ use windows::Win32::UI::Shell::{
     ABN_FULLSCREENAPP, ABN_POSCHANGED, ABS_ALWAYSONTOP, SHLockShared, SHUnlockShared,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowThreadProcessId, HWND_TOPMOST, IsWindow, MONITORINFOF_PRIMARY, PostMessageW,
-    SPI_SETWORKAREA, SPIF_SENDCHANGE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowPos, SystemParametersInfoW, WM_APP,
+    GetWindowRect, GetWindowThreadProcessId, HWND_TOPMOST, IsWindow, MONITORINFOF_PRIMARY,
+    PostMessageW, SPI_SETWORKAREA, SPIF_SENDCHANGE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowPos, SystemParametersInfoW, WM_APP,
 };
 use windows::core::BOOL;
 
@@ -73,6 +86,9 @@ pub(super) const WORK_AREAS: u32 = WM_APP + 0x7e;
 /// A bar deeper than this share of its display does not take room from
 /// windows: it is one that sent its whole display as its place.
 const DEEPEST_SHARE: i64 = 2;
+
+/// How many requests to have the taskbar hide or stay wait for the shell.
+const HIDING_WAITING: usize = 4;
 
 /// A display, as the server arranges bars on it, in physical pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,6 +224,9 @@ pub(super) struct Answer {
     /// A bar that hides, to be put above the other bars as it became
     /// active or moved.
     raised: Option<u32>,
+    /// What a program asked of the taskbar with `ABM_SETSTATE`, where that
+    /// is not what it does now: `true` to hide, `false` to stay.
+    hiding_asked: Option<bool>,
 }
 
 /// A registered edge bar.
@@ -232,6 +251,16 @@ struct Hider {
     ours: bool,
 }
 
+/// The surface of Tessera that applications are told is the taskbar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TaskbarBar {
+    window: u32,
+    edge: u32,
+    /// Where it stood when it last took its edge; `None` for one that was
+    /// hiding when it was chosen and has not taken its edge since.
+    rect: Option<ScreenRect>,
+}
+
 /// The edge bars and what they were told.
 #[derive(Debug, Default)]
 pub(super) struct AppBarServer {
@@ -240,6 +269,9 @@ pub(super) struct AppBarServer {
     hiders: Vec<Hider>,
     /// The frames of the displays an application fills, as bars were told.
     filled: Vec<ScreenRect>,
+    /// The taskbar, once a surface of Tessera registered on the primary
+    /// display; see [`Self::note_taskbar`].
+    taskbar: Option<TaskbarBar>,
 }
 
 /// `to - from`, which cannot overflow: the rectangles of bars come from
@@ -326,6 +358,14 @@ impl AppBarServer {
     /// Answers `request`, which the window of one of Tessera's surfaces
     /// sent if `ours`, with `monitors` the displays there are.
     pub fn answer(&mut self, request: &Request, ours: bool, monitors: &[Monitor]) -> Answer {
+        let answer = self.answer_alone(request, ours, monitors);
+        self.note_taskbar(monitors);
+        answer
+    }
+
+    /// Answers `request` as [`Self::answer`] does, without looking which
+    /// surface is the taskbar after it.
+    fn answer_alone(&mut self, request: &Request, ours: bool, monitors: &[Monitor]) -> Answer {
         let window = request.window;
         let known = self.bars.iter().any(|bar| bar.window == window);
         let mut answer = Answer::default();
@@ -372,11 +412,10 @@ impl AppBarServer {
                 answer.place = Some(place);
                 answer.result = 1;
             }
-            // The taskbar is said to hide while a surface of Tessera that
-            // hides holds the bottom edge of the primary display.
-            ABM_GETSTATE => answer.result = self.state(monitors),
+            // The taskbar is said to hide while it hides.
+            ABM_GETSTATE => answer.result = self.state(),
             ABM_GETTASKBARPOS => {
-                answer.place = self.taskbar(monitors);
+                answer.place = self.taskbar_place(monitors);
                 answer.result = answer.place.is_some().into();
             }
             ABM_GETAUTOHIDEBAR | ABM_GETAUTOHIDEBAREX => {
@@ -417,9 +456,15 @@ impl AppBarServer {
                 answer.raised = self.hides(window).then_some(window);
                 answer.result = 1;
             }
-            // The taskbar of Tessera hides as its layout says, so a request
-            // to have it hide or stay changes nothing.
-            ABM_SETSTATE => answer.result = 1,
+            // A request to have the taskbar hide or stay goes to the shell
+            // where it asks for a change. Tessera's bars are always above
+            // windows, as the taskbar of Windows is since Windows 7, so
+            // `ABS_ALWAYSONTOP` changes nothing.
+            ABM_SETSTATE => {
+                let hides = request.lparam as u32 & ABS_AUTOHIDE != 0;
+                answer.hiding_asked = (hides != self.taskbar_hides()).then_some(hides);
+                answer.result = 1;
+            }
             _ => {}
         }
         answer
@@ -460,18 +505,101 @@ impl AppBarServer {
     }
 
     /// What the taskbar is said to do, as `ABM_GETSTATE` asks: it stays
-    /// above windows, and hides while a surface of Tessera that hides is
-    /// registered at the bottom edge of the primary display, where the
-    /// taskbar of Windows stands.
-    fn state(&self, monitors: &[Monitor]) -> isize {
-        let primary = monitors.iter().find(|monitor| monitor.primary);
-        let hides = primary.is_some_and(|primary| {
-            self.hiders.iter().any(|hider| {
-                hider.ours && hider.edge == ABE_BOTTOM && hider.display == primary.frame
-            })
-        });
-        let hiding = if hides { ABS_AUTOHIDE } else { 0 };
+    /// above windows, and hides while the surface that is the taskbar is
+    /// registered as a bar that hides.
+    fn state(&self) -> isize {
+        let hiding = if self.taskbar_hides() {
+            ABS_AUTOHIDE
+        } else {
+            0
+        };
         (ABS_ALWAYSONTOP | hiding) as isize
+    }
+
+    /// Whether the taskbar hides now.
+    fn taskbar_hides(&self) -> bool {
+        self.taskbar
+            .is_some_and(|taskbar| self.hides(taskbar.window))
+    }
+
+    /// Looks which surface of Tessera is the taskbar, after a request was
+    /// answered: the one chosen before while its window exists, with its
+    /// place kept up to date while it takes its edge; otherwise the first
+    /// placed surface of Tessera that takes its edge on the primary
+    /// display, or else the first that hides there. A surface that stops
+    /// taking its edge to hide, as the taskbar does when a program asks
+    /// it to hide, registers as a bar that hides right after, and stays
+    /// the taskbar meanwhile.
+    fn note_taskbar(&mut self, monitors: &[Monitor]) {
+        if let Some(chosen) = self.taskbar {
+            let docked = { self.bars.iter() }
+                .find(|bar| bar.window == chosen.window && !self.hides(bar.window))
+                .and_then(|bar| bar.place);
+            let hider = { self.hiders.iter() }
+                .find(|hider| hider.window == chosen.window)
+                .copied();
+            if let Some(taskbar) = self.taskbar.as_mut() {
+                if let Some((edge, rect)) = docked {
+                    (taskbar.edge, taskbar.rect) = (edge, Some(rect));
+                } else if let Some(hider) = hider {
+                    taskbar.edge = hider.edge;
+                }
+            }
+            return;
+        }
+        let Some(primary) = monitors.iter().position(|monitor| monitor.primary) else {
+            return;
+        };
+        let frame = monitors[primary].frame;
+        let docked = { self.bars.iter() }
+            .filter(|bar| bar.ours && !self.hides(bar.window))
+            .find_map(|bar| {
+                let (edge, rect) = bar.place?;
+                (display_of(rect, monitors) == Some(primary)).then_some(TaskbarBar {
+                    window: bar.window,
+                    edge,
+                    rect: Some(rect),
+                })
+            });
+        let hiding = || {
+            { self.hiders.iter() }
+                .find(|hider| hider.ours && hider.display == frame)
+                .map(|hider| TaskbarBar {
+                    window: hider.window,
+                    edge: hider.edge,
+                    rect: None,
+                })
+        };
+        self.taskbar = docked.or_else(hiding);
+    }
+
+    /// Where the taskbar stands when it is shown, as `ABM_GETTASKBARPOS`
+    /// asks. A taskbar that was hiding when it was chosen has no rectangle
+    /// here, which [`serve`] reads from its window. Without a taskbar,
+    /// the first placed surface of Tessera on any display.
+    fn taskbar_place(&self, monitors: &[Monitor]) -> Option<(u32, ScreenRect)> {
+        match self.taskbar {
+            Some(taskbar) => Some((taskbar.edge, taskbar.rect?)),
+            None => self.taskbar(monitors),
+        }
+    }
+
+    /// The first placed surface of Tessera that takes its edge on each
+    /// display but the primary one: the display's frame, the edge and the
+    /// rectangle. Explorer keeps a secondary taskbar on such displays.
+    pub fn secondary_bars(&self, monitors: &[Monitor]) -> Vec<(ScreenRect, u32, ScreenRect)> {
+        let mut found: Vec<(ScreenRect, u32, ScreenRect)> = Vec::new();
+        let docked = { self.bars.iter() }.filter(|bar| bar.ours && !self.hides(bar.window));
+        for (edge, rect) in docked.filter_map(|bar| bar.place) {
+            let monitor = display_of(rect, monitors).and_then(|index| monitors.get(index));
+            let Some(monitor) = monitor else {
+                continue;
+            };
+            if !monitor.primary && !found.iter().any(|(frame, ..)| *frame == monitor.frame) {
+                found.push((monitor.frame, edge, rect));
+            }
+        }
+        found
     }
 
     /// Where the bar `window` that is to lie at `edge` can, when it asked
@@ -584,6 +712,9 @@ impl AppBarServer {
         let before = (self.bars.len(), self.hiders.len());
         self.bars.retain(|bar| exists(bar.window));
         self.hiders.retain(|hider| exists(hider.window));
+        if self.taskbar.is_some_and(|taskbar| !exists(taskbar.window)) {
+            self.taskbar = None;
+        }
         let mut answer = Answer::default();
         if placed {
             answer.notes = self.tell_all(ABN_POSCHANGED, 0, |_| true);
@@ -698,6 +829,19 @@ fn look_again() {
     PLACES.fetch_add(1, Ordering::Relaxed);
 }
 
+fn hiding_channel() -> &'static (Sender<bool>, Receiver<bool>) {
+    static CHANNEL: OnceLock<(Sender<bool>, Receiver<bool>)> = OnceLock::new();
+    CHANNEL.get_or_init(|| async_channel::bounded(HIDING_WAITING))
+}
+
+/// What programs ask of the taskbar with `ABM_SETSTATE` where it is not
+/// what the taskbar does: `true` to hide, `false` to stay. One reader is
+/// meant to take it; the oldest requests give way to new ones while
+/// nobody reads.
+pub(super) fn hiding_requests() -> Receiver<bool> {
+    hiding_channel().1.clone()
+}
+
 thread_local! {
     static SERVER: RefCell<AppBarServer> = RefCell::default();
     /// Whether the tray window has posted itself the message to set the
@@ -779,7 +923,14 @@ pub(super) fn serve(window: HWND, data: &[u8]) -> LRESULT {
     unsafe { GetWindowThreadProcessId(handle(request.window), Some(&raw mut process)) };
     let ours = process != 0 && process == std::process::id();
     let monitors = Monitor::all();
-    let answer = SERVER.with_borrow_mut(|server| server.answer(&request, ours, &monitors));
+    let mut answer = SERVER.with_borrow_mut(|server| server.answer(&request, ours, &monitors));
+    if request.message == ABM_GETTASKBARPOS && answer.place.is_none() {
+        answer.place = hidden_taskbar();
+        answer.result = answer.place.is_some().into();
+    }
+    if let Some(hides) = answer.hiding_asked {
+        let _ = hiding_channel().0.force_send(hides);
+    }
     if let Some((edge, rect)) = answer.place
         && request.shared != 0
     {
@@ -805,6 +956,37 @@ pub(super) fn serve(window: HWND, data: &[u8]) -> LRESULT {
     }
     follow(window, &answer);
     LRESULT(answer.result)
+}
+
+/// Where the taskbar stands while it hides and has not taken its edge
+/// since it was chosen: where its window is, which stays where it is
+/// shown while it is hidden.
+fn hidden_taskbar() -> Option<(u32, ScreenRect)> {
+    let taskbar = SERVER.with_borrow(|server| server.taskbar)?;
+    let mut rect = RECT::default();
+    // SAFETY: `rect` outlives the call, which only reads where the window
+    // is and sends it nothing.
+    unsafe { GetWindowRect(handle(taskbar.window), &raw mut rect) }.ok()?;
+    Some((taskbar.edge, rect.into()))
+}
+
+/// The taskbar's edge and where it stands when shown, for the tray window
+/// to stand there; `None` while no surface of Tessera is the taskbar.
+pub(super) fn taskbar_frame() -> Option<(u32, ScreenRect)> {
+    let monitors = Monitor::all();
+    let chosen = SERVER.with_borrow(|server| server.taskbar.is_some());
+    let known = SERVER.with_borrow(|server| server.taskbar_place(&monitors));
+    match chosen {
+        true => known.or_else(hidden_taskbar),
+        false => None,
+    }
+}
+
+/// The surfaces of Tessera on the other displays that a secondary taskbar
+/// stands for: the frame of each display, the edge and the rectangle.
+pub(super) fn secondary_frames() -> Vec<(ScreenRect, u32, ScreenRect)> {
+    let monitors = Monitor::all();
+    SERVER.with_borrow(|server| server.secondary_bars(&monitors))
 }
 
 /// The message the tray window posted itself arrived: the work areas the
@@ -1222,35 +1404,100 @@ mod tests {
         assert_eq!(asked.result, ABS_ALWAYSONTOP as isize);
     }
 
+    fn hide(window: u32, edge: u32, display: ScreenRect, on: i64) -> Request {
+        request(ABM_SETAUTOHIDEBAREX, window, edge, display, on)
+    }
+
     #[test]
-    fn the_taskbar_hides_while_a_surface_of_tessera_hides_at_the_bottom() {
+    fn the_first_surface_of_tessera_that_hides_on_the_primary_display_is_the_taskbar() {
         let primary = rect(0, 0, 1920, 1080);
         let second = rect(1920, 0, 3200, 1024);
         let monitors = monitors();
         let mut server = AppBarServer::default();
         let state = request(ABM_GETSTATE, 9, 0, primary, 0);
-        let hide = |window: u32, edge: u32, display: ScreenRect, on: i64| {
-            request(ABM_SETAUTOHIDEBAREX, window, edge, display, on)
-        };
         // Another program's bar that hides at the bottom is no taskbar.
         server.answer(&hide(3, ABE_BOTTOM, primary, 1), false, &monitors);
         let asked = server.answer(&state, false, &monitors);
         assert_eq!(asked.result, ABS_ALWAYSONTOP as isize);
         server.answer(&hide(3, ABE_BOTTOM, primary, 0), false, &monitors);
-        // Nor is a surface of Tessera that hides elsewhere.
-        server.answer(&hide(4, ABE_LEFT, primary, 1), true, &monitors);
+        // Nor is a surface of Tessera that hides on another display.
         server.answer(&hide(5, ABE_BOTTOM, second, 1), true, &monitors);
         let asked = server.answer(&state, false, &monitors);
         assert_eq!(asked.result, ABS_ALWAYSONTOP as isize);
-        // One at the bottom of the primary display is.
-        server.answer(&hide(6, ABE_BOTTOM, primary, 1), true, &monitors);
+        // One that hides on the primary display is, at any edge.
+        server.answer(&hide(4, ABE_LEFT, primary, 1), true, &monitors);
         let asked = server.answer(&state, false, &monitors);
         assert_eq!(asked.result, (ABS_ALWAYSONTOP | ABS_AUTOHIDE) as isize);
-        let found = request(ABM_GETAUTOHIDEBAREX, 0, ABE_BOTTOM, primary, 0);
-        assert_eq!(server.answer(&found, false, &monitors).result, 6);
-        server.answer(&hide(6, ABE_BOTTOM, primary, 0), true, &monitors);
+        let found = request(ABM_GETAUTOHIDEBAREX, 0, ABE_LEFT, primary, 0);
+        assert_eq!(server.answer(&found, false, &monitors).result, 4);
+        // It was not seen taking its edge, so its window says where it is.
+        let position = request(ABM_GETTASKBARPOS, 9, 0, primary, 0);
+        assert_eq!(server.answer(&position, false, &monitors).place, None);
+        server.answer(&hide(4, ABE_LEFT, primary, 0), true, &monitors);
         let asked = server.answer(&state, false, &monitors);
         assert_eq!(asked.result, ABS_ALWAYSONTOP as isize);
+    }
+
+    #[test]
+    fn the_taskbar_stays_the_taskbar_while_it_hides_as_a_program_asked() {
+        let primary = rect(0, 0, 1920, 1080);
+        let monitors = monitors();
+        let mut server = AppBarServer::default();
+        let state = request(ABM_GETSTATE, 9, 0, primary, 0);
+        let position = request(ABM_GETTASKBARPOS, 9, 0, primary, 0);
+        let set_state = |on: i64| request(ABM_SETSTATE, 9, 0, primary, on);
+        server.answer(&request(ABM_NEW, 5, 0, primary, 0), true, &monitors);
+        let bottom = rect(0, 1032, 1920, 1080);
+        server.answer(
+            &request(ABM_SETPOS, 5, ABE_BOTTOM, bottom, 0),
+            true,
+            &monitors,
+        );
+        let asked = server.answer(&position, false, &monitors);
+        assert_eq!(asked.place, Some((ABE_BOTTOM, bottom)));
+
+        // A program asks the taskbar to hide; the shell is told once.
+        let asked = server.answer(&set_state(i64::from(ABS_AUTOHIDE)), false, &monitors);
+        assert_eq!((asked.result, asked.hiding_asked), (1, Some(true)));
+        // The surface gives its edge up and hides; it is still the taskbar,
+        // and still said to stand where it stood.
+        server.answer(&request(ABM_REMOVE, 5, 0, primary, 0), true, &monitors);
+        server.answer(&request(ABM_NEW, 6, 0, primary, 0), true, &monitors);
+        let top = rect(0, 0, 1920, 40);
+        server.answer(&request(ABM_SETPOS, 6, ABE_TOP, top, 0), true, &monitors);
+        server.answer(&hide(5, ABE_BOTTOM, primary, 1), true, &monitors);
+        let asked = server.answer(&state, false, &monitors);
+        assert_eq!(asked.result, (ABS_ALWAYSONTOP | ABS_AUTOHIDE) as isize);
+        let asked = server.answer(&position, false, &monitors);
+        assert_eq!(asked.place, Some((ABE_BOTTOM, bottom)));
+        let again = server.answer(&set_state(i64::from(ABS_AUTOHIDE)), false, &monitors);
+        assert_eq!(again.hiding_asked, None);
+        let stay = server.answer(&set_state(i64::from(ABS_ALWAYSONTOP)), false, &monitors);
+        assert_eq!(stay.hiding_asked, Some(false));
+
+        // Once its window is gone, the next surface is the taskbar.
+        server.prune(|window| window != 5);
+        let asked = server.answer(&position, false, &monitors);
+        assert_eq!(asked.place, Some((ABE_TOP, top)));
+    }
+
+    #[test]
+    fn other_displays_have_their_first_surface_of_tessera_as_their_taskbar() {
+        let second = rect(1920, 0, 3200, 1024);
+        let monitors = monitors();
+        let mut server = AppBarServer::default();
+        let place = |server: &mut AppBarServer, window, edge, at| {
+            server.answer(&request(ABM_NEW, window, 0, at, 0), true, &monitors);
+            server.answer(&request(ABM_SETPOS, window, edge, at, 0), true, &monitors);
+        };
+        place(&mut server, 1, ABE_BOTTOM, rect(0, 1040, 1920, 1080));
+        place(&mut server, 2, ABE_TOP, rect(1920, 0, 3200, 40));
+        place(&mut server, 3, ABE_BOTTOM, rect(1920, 984, 3200, 1024));
+        dock(&mut server, 4, ABE_LEFT, second, 30);
+        assert_eq!(
+            server.secondary_bars(&monitors),
+            vec![(second, ABE_TOP, rect(1920, 0, 3200, 40))]
+        );
     }
 
     #[test]
