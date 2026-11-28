@@ -6,10 +6,14 @@
 //! the headings, drags their edges and drags them among each other. Each
 //! folder keeps its own, in the store of the file manager.
 
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use serde::{Deserialize, Serialize};
 
 use super::model::{Column, Location};
-use crate::platform::FileProperty;
+use crate::platform::{FileProperty, known_folder_path};
 
 /// The narrowest and the widest a column is made by dragging its edge,
 /// in logical pixels.
@@ -52,11 +56,16 @@ impl Columns {
         Self { shown }
     }
 
-    /// The columns a location shows before the user chose others.
+    /// The columns a location shows before the user chose others: those
+    /// Explorer gives the type of a folder of music, pictures or videos.
     pub fn first_of(location: &Location) -> Self {
         match location {
             Location::Search { .. } => Self::of(&Column::FOUND),
             Location::RecycleBin => Self::of(&Column::BIN),
+            Location::Folder(path) => match FolderType::of(path) {
+                Some(kind) => Self::of(&kind.columns()),
+                None => Self::of(&Column::ALL),
+            },
             _ => Self::of(&Column::ALL),
         }
     }
@@ -119,11 +128,16 @@ impl Columns {
         self.shown.insert(to.clamp(1, last), moved);
     }
 
-    /// The properties of the Shell the columns show.
+    /// The properties of the Shell the columns show; the state of cloud
+    /// files reads those its sync provider gives, beside the attributes.
     pub fn properties(&self) -> Vec<FileProperty> {
-        { self.shown.iter() }
+        let mut properties: Vec<FileProperty> = { self.shown.iter() }
             .filter_map(|shown| shown.column.property())
-            .collect()
+            .collect();
+        if self.has(Column::Status) {
+            properties.extend([FileProperty::SyncState, FileProperty::Sharing]);
+        }
+        properties
     }
 
     /// The columns with the state of cloud files after the name, where
@@ -143,6 +157,99 @@ pub fn choosable() -> Vec<Column> {
     let mut columns = vec![Column::Modified, Column::Kind, Column::Size, Column::Status];
     columns.extend(FileProperty::COLUMNS.map(Column::Property));
     columns
+}
+
+/// The further columns "More…" of the menu of the headings offers.
+pub fn more_choosable() -> Vec<Column> {
+    FileProperty::MORE.map(Column::Property).to_vec()
+}
+
+/// The types of folders Explorer gives columns of their own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FolderType {
+    Music,
+    Pictures,
+    Videos,
+}
+
+/// The known folders of the user, by type, once they were looked up.
+static KNOWN_FOLDERS: OnceLock<Vec<(PathBuf, FolderType)>> = OnceLock::new();
+static LOOKING_UP: AtomicBool = AtomicBool::new(false);
+
+impl FolderType {
+    /// The columns a folder of the type starts with, as Explorer's: for
+    /// music the number, title, artists and album; for pictures the day
+    /// taken, the tags, the size and the rating; for videos the date and
+    /// the length.
+    pub fn columns(self) -> Vec<Column> {
+        let property = Column::Property;
+        match self {
+            Self::Music => vec![
+                Column::Name,
+                property(FileProperty::Track),
+                property(FileProperty::Title),
+                property(FileProperty::Artists),
+                property(FileProperty::Album),
+            ],
+            Self::Pictures => vec![
+                Column::Name,
+                property(FileProperty::DateTaken),
+                property(FileProperty::Tags),
+                Column::Size,
+                property(FileProperty::Rating),
+            ],
+            Self::Videos => vec![
+                Column::Name,
+                Column::Modified,
+                property(FileProperty::Length),
+            ],
+        }
+    }
+
+    /// The type of the folder at `path`: that of the known folder of the
+    /// user (Music, Pictures, Videos) it is or lies in. The known folders
+    /// are looked up once, away from the user interface; until they are,
+    /// no folder has a type.
+    pub fn of(path: &Path) -> Option<Self> {
+        match KNOWN_FOLDERS.get() {
+            Some(known) => type_below(known, path),
+            None => {
+                if !LOOKING_UP.swap(true, Ordering::Relaxed) {
+                    let looked = std::thread::Builder::new()
+                        .name("tessera-folder-types".to_owned())
+                        .spawn(|| {
+                            let known: Vec<(PathBuf, FolderType)> = [
+                                ("My Music", Self::Music),
+                                ("My Pictures", Self::Pictures),
+                                ("My Video", Self::Videos),
+                            ]
+                            .into_iter()
+                            .filter_map(|(name, kind)| Some((known_folder_path(name)?, kind)))
+                            .collect();
+                            KNOWN_FOLDERS.set(known).ok();
+                        });
+                    if let Err(error) = looked {
+                        report!("the types of folders are not looked up: {error}");
+                    }
+                }
+                None
+            }
+        }
+    }
+}
+
+/// The type of the known folder of `known` that `path` is or lies in, the
+/// nearest first.
+fn type_below(known: &[(PathBuf, FolderType)], path: &Path) -> Option<FolderType> {
+    let key = |path: &Path| path.to_string_lossy().trim_end_matches('\\').to_lowercase();
+    let path = key(path);
+    { known.iter() }
+        .filter(|(folder, _)| {
+            let folder = key(folder);
+            path == folder || path.starts_with(&format!("{folder}\\"))
+        })
+        .max_by_key(|(folder, _)| folder.as_os_str().len())
+        .map(|(_, kind)| *kind)
 }
 
 #[cfg(test)]
@@ -196,6 +303,44 @@ mod tests {
         assert_eq!(columns.shown()[1].width, WIDEST);
         let status = Columns::of(&Column::ALL).with_status();
         assert_eq!(names(&status)[1], Column::Status);
+    }
+
+    #[test]
+    fn folders_of_music_pictures_and_videos_have_their_columns() {
+        let known = [
+            (PathBuf::from(r"C:\Users\Ann\Music"), FolderType::Music),
+            (
+                PathBuf::from(r"C:\Users\Ann\Pictures"),
+                FolderType::Pictures,
+            ),
+            (
+                PathBuf::from(r"C:\Users\Ann\Pictures\Videos"),
+                FolderType::Videos,
+            ),
+        ];
+        let at = |path: &str| type_below(&known, Path::new(path));
+        assert_eq!(at(r"C:\Users\Ann\Music"), Some(FolderType::Music));
+        assert_eq!(at(r"c:\users\ann\music\Album\"), Some(FolderType::Music));
+        assert_eq!(at(r"C:\Users\Ann\Musical"), None);
+        assert_eq!(
+            at(r"C:\Users\Ann\Pictures\Videos\2026"),
+            Some(FolderType::Videos)
+        );
+        assert_eq!(
+            at(r"C:\Users\Ann\Pictures\Trip"),
+            Some(FolderType::Pictures)
+        );
+        let music = Columns::of(&FolderType::Music.columns());
+        assert_eq!(names(&music)[1], Column::Property(FileProperty::Track));
+        // The state of cloud files reads the states its provider gives.
+        assert!(music.properties().contains(&FileProperty::Album));
+        let status = Columns::of(&Column::ALL).with_status();
+        assert!(status.properties().contains(&FileProperty::SyncState));
+        assert!(
+            more_choosable()
+                .iter()
+                .all(|column| !choosable().contains(column))
+        );
     }
 
     #[test]

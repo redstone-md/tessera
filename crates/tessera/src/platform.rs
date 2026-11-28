@@ -141,6 +141,7 @@ pub use win32::{Removal, app_settings, put_on_desktop};
 pub use win32::{Repeat, SessionInfo};
 pub use win32::{RunHistory, RunningProcess};
 pub use win32::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
+pub use win32::{SyncState, shared};
 pub use win32::{SystemWallpaper, WallpaperPosition, user_locale};
 pub use win32::{WallpaperAnswers, WallpaperRequest, WallpaperServer};
 pub use win32::{expand_variables, find_program, recent_folder};
