@@ -814,8 +814,8 @@ pub struct Config {
     #[serde(default, rename = "file_action")]
     pub file_actions: Vec<crate::file_actions::FileAction>,
     // Wave 3, shell-services: the services Explorer hosts for other programs.
-    // #[serde(default)]
-    // pub shell_services: crate::shell_services::ShellServicesConfig,
+    #[serde(default)]
+    pub shell_services: crate::shell_services::ShellServicesConfig,
     // Wave 3, theme-styles: the accent, light or dark mode and cursors of Windows, from the theme.
     // #[serde(default)]
     // pub windows_look: crate::theme::windows_look::WindowsLookConfig,

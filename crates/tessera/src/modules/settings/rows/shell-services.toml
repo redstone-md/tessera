@@ -1,3 +1,39 @@
 # Rows of the settings filled by shell-services. Format: modules/settings/rows.rs
 # (RowCard, and [[action]] titles). Plain labels are English texts of the
 # RUSSIAN table in i18n.rs.
+
+# The services Explorer hosts for other programs, hosted by Tessera as the
+# shell of the session: `[shell_services]`.
+
+[[card]]
+section = "Session"
+title = "Shell services"
+table = "shell_services"
+
+[[card.row]]
+key = "log_messages"
+kind = "toggle"
+label = "Record what programs ask of the shell"
+description = "As the shell, writes the messages its windows leave unanswered to shell-messages.log in Tessera's local data folder."
+default = true
+
+[[card.row]]
+key = "dde"
+kind = "toggle"
+label = "Answer the program manager's DDE"
+description = "As the shell, old installers can make groups and shortcuts of the Start menu."
+default = true
+
+[[card.row]]
+key = "service_objects"
+kind = "toggle"
+label = "Start the objects of ShellServiceObjects"
+description = "As the shell, the objects programs register to start with Explorer start with Tessera."
+default = false
+
+[[card.row]]
+key = "change_server"
+kind = "toggle"
+label = "Serve the change notifications of the Shell"
+description = "Not available yet: the protocol waits to be confirmed on Windows."
+default = false

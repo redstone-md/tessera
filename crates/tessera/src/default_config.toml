@@ -576,6 +576,25 @@
 # emergency_keys = true
 # quit_to_explorer = true
 # media_keys = true
+# [shell_services] says which of the services Explorer hosts for other
+# programs Tessera hosts as the shell of the session; beside Explorer it
+# changes nothing (see docs/SHELL.md).
+#   log_messages     whether the messages the desktop and the task manager
+#                    window leave unanswered are written, bounded, to
+#                    %LOCALAPPDATA%\tessera\shell-messages.log (true)
+#   dde              whether the program manager's DDE (PROGMAN) is
+#                    answered, so that old installers can make groups and
+#                    shortcuts of the Start menu (true)
+#   service_objects  whether the objects registered under
+#                    ShellServiceObjects start with the shell and close at
+#                    its end (false)
+#   change_server    whether the Shell's change notifications are served;
+#                    not available yet, Tessera only says so (false)
+# [shell_services]
+# log_messages = true
+# dde = true
+# service_objects = false
+# change_server = false
 # [startup] says what Tessera does, when it is the shell of the session,
 # about the programs that start with the session; beside Explorer it starts
 # none of them, Explorer does. Once per session, delay seconds after the

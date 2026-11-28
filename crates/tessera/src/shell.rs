@@ -184,6 +184,7 @@ impl Shell {
         config.file_view.configure(cx);
         crate::terminal::Terminals::configure(&config.terminal, cx);
         crate::files::WindowsRestore::start(&config.files, cx);
+        crate::shell_services::start(&config.shell_services, cx);
         Startup::start(&config.startup, cx);
         Snapper::start(&config.snap, config.windows_keys, &config.keys, cx);
         Rules::use_templates(&config.rule_templates, cx);
@@ -461,6 +462,7 @@ impl Shell {
         config.file_view.configure(cx);
         crate::terminal::Terminals::configure(&config.terminal, cx);
         crate::files::WindowsRestore::configure(&config.files, cx);
+        crate::shell_services::configure(&config.shell_services, cx);
         Startup::configure(&config.startup, cx);
         Snapper::configure(&config.snap, config.windows_keys, &config.keys, cx);
         Rules::use_templates(&config.rule_templates, cx);

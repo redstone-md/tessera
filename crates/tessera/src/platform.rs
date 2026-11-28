@@ -25,9 +25,11 @@ pub use win32::PowerChoices;
 #[allow(unused_imports, reason = "for the starts that wait for a program")]
 pub use win32::Process;
 pub use win32::PropertyReader;
+pub use win32::ProgmanDde;
 pub use win32::QuickFolder;
 pub use win32::RecycledItem;
 pub use win32::SessionKey;
+pub use win32::ShellServiceObjects;
 pub use win32::ShellThread;
 pub use win32::ShellWindows;
 pub use win32::ShowDesktop;
@@ -81,6 +83,11 @@ pub use win32::{
     DesktopFolders, DesktopLayer, ExplorerIcons, FolderWatch, LayerKind, VirtualKind, layer_frame,
     virtual_items,
 };
+#[allow(
+    unused_imports,
+    reason = "fed from DesktopIcons once desktop-fidelity is merged"
+)]
+pub use win32::{DesktopLayout, DesktopView, Placement};
 pub use win32::{DesktopSurvey, WindowMark};
 #[allow(
     unused_imports,

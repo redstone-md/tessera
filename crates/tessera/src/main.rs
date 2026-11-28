@@ -49,6 +49,7 @@ mod runners;
 mod session;
 mod shell;
 mod shell_entries;
+mod shell_services;
 mod snap;
 mod startup;
 mod surface;

@@ -1990,3 +1990,13 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Open the folder windows again at the next start" = "Volver a abrir las ventanas de carpetas en el próximo inicio"
 "Where its shell starts; the folder of the user while it is not set." = "Dónde se inicia su shell; mientras no se indique, la carpeta del usuario."
 "Show or hide the drop-down terminal" = "Mostrar u ocultar el terminal desplegable"
+# shell-services: the services of the shell for other programs.
+"Shell services" = "Servicios del shell"
+"Record what programs ask of the shell" = "Registrar lo que los programas piden al shell"
+"As the shell, writes the messages its windows leave unanswered to shell-messages.log in Tessera's local data folder." = "Como shell, escribe los mensajes que sus ventanas dejan sin respuesta en shell-messages.log, en la carpeta de datos locales de Tessera."
+"Answer the program manager's DDE" = "Responder al DDE del administrador de programas"
+"As the shell, old installers can make groups and shortcuts of the Start menu." = "Como shell, los instaladores antiguos pueden crear grupos y accesos directos del menú Inicio."
+"Start the objects of ShellServiceObjects" = "Iniciar los objetos de ShellServiceObjects"
+"As the shell, the objects programs register to start with Explorer start with Tessera." = "Como shell, los objetos que los programas registran para iniciarse con el Explorador se inician con Tessera."
+"Serve the change notifications of the Shell" = "Atender las notificaciones de cambios del shell"
+"Not available yet: the protocol waits to be confirmed on Windows." = "Aún no disponible: el protocolo espera confirmarse en Windows."
