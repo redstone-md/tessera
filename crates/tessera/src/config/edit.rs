@@ -2202,6 +2202,111 @@ impl ConfigFile {
             entries.push(table);
         }
         self.document.insert("key", Item::ArrayOfTables(entries));
+// window-rules-editor: the `[[rule]]` entries changed one at a time by the
+// editor of the rules, each keeping the comment above it, and the others
+// as they are written.
+impl ConfigFile {
+    /// The `[[rule]]` entries of the file, made where there are none yet
+    /// if `make`.
+    fn window_rules(&mut self, make: bool) -> Option<&mut ArrayOfTables> {
+        if make {
+            let item = { self.document.entry("rule") }
+                .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+            return item.as_array_of_tables_mut();
+        }
+        self.document.get_mut("rule")?.as_array_of_tables_mut()
+    }
+
+    /// Takes the `[[rule]]` list away once it is empty.
+    fn tidy_window_rules(&mut self) {
+        let empty = { self.document.get("rule") }
+            .and_then(Item::as_array_of_tables)
+            .is_some_and(ArrayOfTables::is_empty);
+        if empty {
+            self.document.remove("rule");
+        }
+    }
+
+    /// Puts `rule` in place of the `[[rule]]` at `index`, keeping the
+    /// comment above it and its place in the file. Whether there is one
+    /// there is returned.
+    pub fn set_window_rule(&mut self, index: usize, rule: &toml::Table) -> bool {
+        let Some(old) = self
+            .window_rules(false)
+            .and_then(|rules| rules.get_mut(index))
+        else {
+            return false;
+        };
+        let mut new = rule_table(rule);
+        *new.decor_mut() = old.decor().clone();
+        new.set_position(old.position());
+        *old = new;
+        true
+    }
+
+    /// Puts `rule` as a `[[rule]]` before the one at `index`, or after the
+    /// last one where `index` is how many there are. Whether there is such
+    /// a place is returned.
+    pub fn insert_window_rule(&mut self, index: usize, rule: &toml::Table) -> bool {
+        let Some(rules) = self.window_rules(true) else {
+            return false;
+        };
+        if index > rules.len() {
+            self.tidy_window_rules();
+            return false;
+        }
+        if index == rules.len() {
+            return self.add_rule(rule_table(rule), "");
+        }
+        let mut new = rule_table(rule);
+        new.decor_mut().set_prefix("\n");
+        // The file is written in the order of the places tables were read
+        // at; the new one takes the place of the one it goes before, and
+        // comes first of the two.
+        let place = rules.get(index).and_then(Table::position);
+        new.set_position(place);
+        rules.insert(index, new);
+        true
+    }
+
+    /// Takes the `[[rule]]` at `index` out, with the comment above it.
+    /// Whether there was one is returned.
+    pub fn remove_window_rule(&mut self, index: usize) -> bool {
+        let Some(rules) = self.window_rules(false) else {
+            return false;
+        };
+        if index >= rules.len() {
+            return false;
+        }
+        rules.remove(index);
+        self.tidy_window_rules();
+        true
+    }
+
+    /// Moves the `[[rule]]` at `from` to `to` among the rules, with the
+    /// comment above it; the others keep their order. Whether both are
+    /// places of rules is returned.
+    pub fn move_window_rule(&mut self, from: usize, to: usize) -> bool {
+        let Some(rules) = self.window_rules(false) else {
+            return false;
+        };
+        if from >= rules.len() || to >= rules.len() {
+            return false;
+        }
+        if from == to {
+            return true;
+        }
+        let mut tables: Vec<Table> = rules.iter().cloned().collect();
+        // The places tables were read at stay where they are, in order, and
+        // the tables take them in their new order.
+        let places: Vec<Option<isize>> = tables.iter().map(Table::position).collect();
+        let moved = tables.remove(from);
+        tables.insert(to, moved);
+        rules.clear();
+        for (mut table, place) in tables.into_iter().zip(places) {
+            table.set_position(place);
+            rules.push(table);
+        }
         true
     }
 }
@@ -2269,6 +2374,30 @@ fn spec_value(spec: &super::WidgetSpec) -> Value {
 /// A value read from the file, as it is written again.
 fn edit_value(read: &toml::Value) -> Value {
     match read {
+/// `rule` as a table of the file: the keys that name windows first, in
+/// the order the rules document them, then the others; tables in it are
+/// written inline.
+fn rule_table(rule: &toml::Table) -> Table {
+    let naming = crate::rules::matching::Naming::KEYS;
+    let mut table = Table::new();
+    for key in naming {
+        if let Some(found) = rule.get(key) {
+            table.insert(key, Item::Value(edit_value_of(found)));
+        }
+    }
+    for (key, found) in rule
+        .iter()
+        .filter(|(key, _)| !naming.contains(&key.as_str()))
+    {
+        table.insert(key, Item::Value(edit_value_of(found)));
+    }
+    table
+}
+
+/// A value read with `toml` as a value of the file, a table in it written
+/// inline.
+fn edit_value_of(found: &toml::Value) -> Value {
+    match found {
         toml::Value::String(text) => text.as_str().into(),
         toml::Value::Integer(number) => (*number).into(),
         toml::Value::Float(number) => (*number).into(),
@@ -2288,6 +2417,16 @@ fn edit_value(read: &toml::Value) -> Value {
             }
             table.fmt();
             Value::InlineTable(table)
+        toml::Value::Array(items) => Value::Array(items.iter().map(edit_value_of).collect()),
+        toml::Value::Table(entries) => {
+            let mut inline = InlineTable::new();
+            for (key, entry) in entries {
+                inline.insert(key, edit_value_of(entry));
+            }
+            Value::InlineTable(inline)
+        }
+        toml::Value::Datetime(datetime) => {
+            { datetime.to_string().parse() }.unwrap_or_else(|_| datetime.to_string().into())
         }
     }
 }
@@ -2436,6 +2575,8 @@ pub fn reset_config() -> Result<(), String> {
 
 #[cfg(test)]
 mod settings_core_tests {
+#[cfg(test)]
+mod window_rules_editor_tests {
     use super::*;
 
     fn file(text: &str) -> ConfigFile {
@@ -2841,5 +2982,98 @@ mod key_entry_tests {
             ..opening("x", "none", Some("y"))
         };
         assert_eq!(key_of_table(&key_table(&key)), Some(key));
+    fn rule(text: &str) -> toml::Table {
+        toml::from_str(text).unwrap()
+    }
+
+    /// The `exe` of each rule, in the order of the file as it is written.
+    fn exes(edited: &ConfigFile) -> Vec<String> {
+        let table: toml::Table = toml::from_str(&edited.document.to_string()).unwrap();
+        let rules = table.get("rule").and_then(toml::Value::as_array);
+        { rules.into_iter().flatten() }
+            .map(|rule| rule["exe"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    }
+
+    const RULES: &str = "# Mine.\n[[rule]]\n# The editor.\nexe = \"a.exe\"\nfloat = true\n\n# For b.\n[[rule]]\nexe = \"b.exe\"\n\n[tiling]\nenabled = true\n\n[[rule]]\nexe = \"c.exe\"\n";
+
+    #[test]
+    fn a_rule_is_replaced_in_its_place_with_its_comment() {
+        let mut edited = file(RULES);
+        let new = rule(
+            "exe = \"b2.exe\"\nnot = { title = \"x\" }\nany = [{ class = \"A\" }]\nopacity = 0.5",
+        );
+        assert!(edited.set_window_rule(1, &new));
+        let text = edited.document.to_string();
+        assert!(
+            text.contains("# For b.\n[[rule]]\nexe = \"b2.exe\""),
+            "{text}"
+        );
+        assert!(text.contains("not = { title = \"x\" }"), "{text}");
+        assert!(text.contains("# The editor."));
+        assert_eq!(exes(&edited), ["a.exe", "b2.exe", "c.exe"]);
+        assert!(!edited.set_window_rule(3, &new));
+        edited.config().expect("it is usable");
+    }
+
+    #[test]
+    fn rules_are_put_in_taken_out_and_moved() {
+        let mut edited = file(RULES);
+        assert!(edited.insert_window_rule(0, &rule("exe = \"first.exe\"")));
+        assert!(edited.insert_window_rule(4, &rule("exe = \"last.exe\"")));
+        assert!(!edited.insert_window_rule(9, &rule("exe = \"x.exe\"")));
+        assert_eq!(
+            exes(&edited),
+            ["first.exe", "a.exe", "b.exe", "c.exe", "last.exe"]
+        );
+        assert!(edited.move_window_rule(0, 3));
+        assert_eq!(
+            exes(&edited),
+            ["a.exe", "b.exe", "c.exe", "first.exe", "last.exe"]
+        );
+        assert!(edited.move_window_rule(4, 0));
+        assert_eq!(
+            exes(&edited),
+            ["last.exe", "a.exe", "b.exe", "c.exe", "first.exe"]
+        );
+        assert!(!edited.move_window_rule(5, 0));
+        // The comments go with their rules.
+        let text = edited.document.to_string();
+        assert!(
+            text.contains("# For b.\n[[rule]]\nexe = \"b.exe\""),
+            "{text}"
+        );
+        assert!(text.contains("[tiling]\nenabled = true"));
+        assert!(edited.remove_window_rule(1));
+        assert_eq!(exes(&edited), ["last.exe", "b.exe", "c.exe", "first.exe"]);
+        assert!(!edited.document.to_string().contains("# The editor."));
+        edited.config().expect("it is usable");
+        for _ in 0..4 {
+            assert!(edited.remove_window_rule(0));
+        }
+        assert!(!edited.remove_window_rule(0));
+        assert!(!edited.document.to_string().contains("[[rule]]"));
+    }
+
+    #[test]
+    fn a_rule_is_put_in_a_file_without_rules() {
+        let mut edited = file("[tiling]\nenabled = true\n");
+        assert!(edited.insert_window_rule(0, &rule("exe = \"a.exe\"\nenabled = false")));
+        assert_eq!(exes(&edited), ["a.exe"]);
+        let config = edited.config().expect("it is usable");
+        assert_eq!(config.rules.len(), 1);
+        assert!(!config.rules[0].is_enabled());
+        let mut empty = file("");
+        assert!(!empty.insert_window_rule(1, &rule("exe = \"a.exe\"")));
+        assert_eq!(empty.document.to_string(), "");
+    }
+
+    #[test]
+    fn the_names_come_first() {
+        let table = rule_table(&rule(
+            "above = true\nexe = \"a.exe\"\napply = \"always\"\ntitle = \"T\"",
+        ));
+        let keys: Vec<&str> = table.iter().map(|(key, _)| key).collect();
+        assert_eq!(keys, ["exe", "title", "above", "apply"]);
     }
 }

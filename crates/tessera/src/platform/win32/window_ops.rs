@@ -825,3 +825,169 @@ mod tests {
         assert_eq!(shifted(moved, (-5, 3)), rect(0, 0, 10, 20));
     }
 }
+
+// window-rules-editor: whether a window takes the keyboard when it is
+// clicked or brought forward, and whether it can be closed from its title
+// bar, as the rules `accept_focus` and `closeable` say.
+
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnableMenuItem, GetMenuState, GetSystemMenu, MENU_ITEM_FLAGS, MF_BYCOMMAND, MF_DISABLED,
+    MF_ENABLED, MF_GRAYED, SC_CLOSE, WS_EX_NOACTIVATE,
+};
+
+/// The windows Tessera gave `WS_EX_NOACTIVATE`, and those whose Close it
+/// greyed, so that it gives back only what it took.
+static NOT_ACTIVATED: Mutex<Option<HashSet<isize>>> = Mutex::new(None);
+static NOT_CLOSEABLE: Mutex<Option<HashSet<isize>>> = Mutex::new(None);
+
+/// The value `GetMenuState` gives for an entry the menu does not have.
+const NO_ENTRY: u32 = u32::MAX;
+
+/// Keeps or forgets `raw` in `set`; whether it was kept before is returned.
+fn mark(set: &Mutex<Option<HashSet<isize>>>, raw: isize, kept: bool) -> bool {
+    let mut set = set.lock().unwrap_or_else(PoisonError::into_inner);
+    let set = set.get_or_insert_with(HashSet::new);
+    match kept {
+        true => !set.insert(raw),
+        false => set.remove(&raw),
+    }
+}
+
+/// The windows of `set` that are still there, and the set emptied.
+fn drained(set: &Mutex<Option<HashSet<isize>>>) -> Vec<AppWindowId> {
+    let mut set = set.lock().unwrap_or_else(PoisonError::into_inner);
+    let taken = set.take().unwrap_or_default();
+    { taken.into_iter() }
+        .map(AppWindowId::from_raw)
+        .filter(|id| id.exists())
+        .collect()
+}
+
+impl AppWindowId {
+    /// Whether the window takes the keyboard when it is clicked or brought
+    /// forward: not while it has `WS_EX_NOACTIVATE`.
+    pub fn accepts_focus(self) -> bool {
+        self.extended_style() & WS_EX_NOACTIVATE.0 == 0
+    }
+
+    /// Has the window take the keyboard when it is clicked or brought
+    /// forward, or not, by its extended style, which Windows lets another
+    /// process change. Tessera takes `WS_EX_NOACTIVATE` away again only
+    /// from a window it gave it.
+    pub fn set_accepts_focus(self, accepts: bool) {
+        let hwnd = self.hwnd();
+        if accepts && !mark(&NOT_ACTIVATED, self.raw(), false) {
+            return;
+        }
+        if !accepts {
+            mark(&NOT_ACTIVATED, self.raw(), true);
+        }
+        let extended = self.extended_style();
+        let wanted = match accepts {
+            true => extended & !WS_EX_NOACTIVATE.0,
+            false => extended | WS_EX_NOACTIVATE.0,
+        };
+        if wanted == extended {
+            return;
+        }
+        // SAFETY: the calls change a style of a window, which fails for a
+        // handle whose window is gone, and do not wait for its program.
+        unsafe {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted as isize);
+        }
+    }
+
+    /// Whether Close of the window's system menu, and with it the close
+    /// button of its title bar, can be used; a window without one counts
+    /// as closeable.
+    pub fn is_closeable(self) -> bool {
+        // SAFETY: the calls only read the system menu of the window and
+        // the state of one of its entries; a window that is gone gives no
+        // menu.
+        unsafe {
+            let menu = GetSystemMenu(self.hwnd(), false);
+            if menu.is_invalid() {
+                return true;
+            }
+            let state = GetMenuState(menu, SC_CLOSE, MF_BYCOMMAND);
+            state == NO_ENTRY || state & (MF_GRAYED.0 | MF_DISABLED.0) == 0
+        }
+    }
+
+    /// Greys Close of the window's system menu, which greys the close
+    /// button of its title bar too, or makes it usable again. Alt+F4,
+    /// which the program answers itself, still closes it. Tessera makes
+    /// Close usable again only where it greyed it.
+    pub fn set_closeable(self, closeable: bool) {
+        if closeable && !mark(&NOT_CLOSEABLE, self.raw(), false) {
+            return;
+        }
+        if !closeable {
+            mark(&NOT_CLOSEABLE, self.raw(), true);
+        }
+        let flags: MENU_ITEM_FLAGS = match closeable {
+            true => MF_BYCOMMAND | MF_ENABLED,
+            false => MF_BYCOMMAND | MF_GRAYED,
+        };
+        // SAFETY: the calls change an entry of the system menu of the
+        // window and have its frame drawn again, posted so that they do not
+        // wait for its program; a window that is gone gives no menu.
+        unsafe {
+            let menu = GetSystemMenu(self.hwnd(), false);
+            if menu.is_invalid() {
+                return;
+            }
+            let _ = EnableMenuItem(menu, SC_CLOSE, flags);
+            let redraw = SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER;
+            let _ = SetWindowPos(
+                self.hwnd(),
+                None,
+                0,
+                0,
+                0,
+                0,
+                redraw | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+            );
+        }
+    }
+
+    /// Gives every window back the keyboard and its Close that Tessera
+    /// took, as when Tessera quits.
+    pub fn give_focus_and_close_back() {
+        for id in drained(&NOT_ACTIVATED) {
+            let extended = id.extended_style();
+            // SAFETY: as in `set_accepts_focus`.
+            unsafe {
+                SetWindowLongPtrW(
+                    id.hwnd(),
+                    GWL_EXSTYLE,
+                    (extended & !WS_EX_NOACTIVATE.0) as isize,
+                );
+            }
+        }
+        for id in drained(&NOT_CLOSEABLE) {
+            // SAFETY: as in `set_closeable`.
+            unsafe {
+                let menu = GetSystemMenu(id.hwnd(), false);
+                if !menu.is_invalid() {
+                    let _ = EnableMenuItem(menu, SC_CLOSE, MF_BYCOMMAND | MF_ENABLED);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod taken_tests {
+    use super::*;
+
+    #[test]
+    fn only_what_was_taken_is_given_back() {
+        static SET: Mutex<Option<HashSet<isize>>> = Mutex::new(None);
+        assert!(!mark(&SET, 7, false));
+        assert!(!mark(&SET, 7, true));
+        assert!(mark(&SET, 7, true));
+        assert!(mark(&SET, 7, false));
+        assert!(!mark(&SET, 7, false));
+    }
+}

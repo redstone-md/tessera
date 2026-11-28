@@ -10,9 +10,18 @@
 //! or minimized, made to fill their display, kept above or below the
 //! others, drawn see-through (also only while they are not in front),
 //! without their thin border or their title bar, and how small and large
-//! they may be. A rule with `apply = "always"` does it again whenever the
-//! window changes, as far as it differs; one with `apply = "remember"`
-//! opens the next window it names where the last one was.
+//! they may be, whether they take the keyboard when clicked, whether their
+//! close button can be used, and the icon and application they are shown
+//! as. A rule with `apply = "always"` (or `"force"`) does it again whenever
+//! the window changes, as far as it differs; one with `apply = "remember"`
+//! opens the next window it names where the last one was; one with
+//! `apply = "now"` does it once to the windows that are open when the
+//! configuration is read, and to no window that comes later. A rule with
+//! `enabled = false` is kept in the file and does nothing.
+//!
+//! A rule can also be given to one window until it closes, from the editor
+//! of the rules: [`Rules::temporary`] keeps it in memory only, and it has
+//! the last word for that window.
 //!
 //! Every rule that names a window applies, in the order of the file, so
 //! that a later one has the last word. The sets of rules that come with
@@ -22,9 +31,10 @@
 //! What the rules say of tiling, of the dock and of the window switcher
 //! is asked for with [`Rules::of`].
 
+mod focus;
 pub mod matching;
 mod memory;
-mod templates;
+pub mod templates;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -37,7 +47,7 @@ use toml_edit::{Array, Table, value};
 
 use crate::config::edit::ConfigFile;
 use crate::platform::{
-    AppWindow, AppWindowId, Display, MoveEvent, MoveWatch, ScreenRect, WindowEvents,
+    AppWindow, AppWindowId, Display, FocusLevel, MoveEvent, MoveWatch, ScreenRect, WindowEvents,
 };
 use crate::snap::{Zone, carried};
 use crate::tiling::Tiler;
@@ -65,18 +75,38 @@ const OPACITIES: (f32, f32) = (0.1, 1.);
 /// logical pixels.
 const SIDES: (u32, u32) = (1, 20_000);
 
-/// When a rule does what it says.
+/// When a rule does what it says, as KWin's policies have it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Apply {
     /// When the window is first seen.
     #[default]
     Initially,
-    /// Whenever something happens to the window, as far as it differs.
+    /// Whenever something happens to the window, as far as it differs;
+    /// `force` is another word for it.
+    #[serde(alias = "force")]
     Always,
     /// When the window is first seen, and the next window the rule names
     /// opens where the last one was.
     Remember,
+    /// Once, to the windows that are open when the configuration is read,
+    /// and then not again.
+    Now,
+}
+
+impl Apply {
+    /// Every policy, in the order they are offered.
+    pub const ALL: [Self; 4] = [Self::Initially, Self::Always, Self::Remember, Self::Now];
+
+    /// The word a rule writes for it.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Initially => "initially",
+            Self::Always => "always",
+            Self::Remember => "remember",
+            Self::Now => "now",
+        }
+    }
 }
 
 /// Where a rule puts a window: in the middle of the work area, or with its
@@ -114,7 +144,7 @@ impl TryFrom<PositionText> for Position {
 /// What a `[[rule]]` says is done to the windows it names.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Says {
+pub struct Says {
     /// Whether the window is left out of the tiles.
     float: Option<bool>,
     /// Whether the window is tiled whatever `[tiling]` says of it, or not.
@@ -154,29 +184,74 @@ struct Says {
     skip_dock: Option<bool>,
     /// Whether the window switcher leaves the window out.
     skip_switcher: Option<bool>,
+    /// Whether the window takes the keyboard when it is clicked or brought
+    /// forward.
+    accept_focus: Option<bool>,
+    /// Whether the close button of the window and Close of its system
+    /// menu can be used.
+    closeable: Option<bool>,
+    /// The picture the dock shows for the window, a file.
+    icon: Option<String>,
+    /// The application the dock groups the window with, by its identifier.
+    app_id: Option<String>,
+    /// How strictly the window is kept from taking the foreground by
+    /// itself.
+    focus: Option<FocusLevel>,
     #[serde(default)]
     apply: Apply,
 }
 
 /// A `[[rule]]`: which windows it names, and what it says of them.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RuleConfig {
     condition: Condition,
     says: Says,
-    /// `category`, kept once for all windows.
+    /// Whether it is used: `enabled = false` keeps it in the file only.
+    enabled: bool,
+    /// `category`, `icon` and `app_id`, kept once for all windows.
     category: Option<&'static str>,
+    icon: Option<&'static str>,
+    app_id: Option<&'static str>,
     /// What the frames of its windows are remembered by, for a rule that
     /// remembers them.
     remembered_as: Option<&'static str>,
 }
 
+impl Default for RuleConfig {
+    fn default() -> Self {
+        Self {
+            condition: Condition::default(),
+            says: Says::default(),
+            enabled: true,
+            category: None,
+            icon: None,
+            app_id: None,
+            remembered_as: None,
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for RuleConfig {
-    /// A rule is one table: the keys of [`Naming`] name the windows, the
-    /// others say what is done to them, and each part refuses keys it
-    /// does not know.
+    /// A rule is one table: the keys of [`Naming`] name the windows,
+    /// `enabled` says whether it is used, the others say what is done to
+    /// them, and each part refuses keys it does not know.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de::Error;
-        let mut says = toml::Table::deserialize(deserializer)?;
+        let says = toml::Table::deserialize(deserializer)?;
+        Self::of_table(says).map_err(D::Error::custom)
+    }
+}
+
+impl RuleConfig {
+    /// The rule a table of the file is, or why it is none: what a
+    /// `[[rule]]` is read as, so that the editor of the rules checks a
+    /// rule as the configuration will.
+    pub fn of_table(mut says: toml::Table) -> Result<Self, String> {
+        let enabled = match says.remove("enabled") {
+            None => true,
+            Some(toml::Value::Boolean(enabled)) => enabled,
+            Some(_) => return Err("`enabled` is true or false".to_owned()),
+        };
         let mut naming = toml::Table::new();
         for key in Naming::KEYS {
             if let Some(found) = says.remove(key) {
@@ -185,22 +260,46 @@ impl<'de> Deserialize<'de> for RuleConfig {
         }
         let naming: Naming = toml::Value::Table(naming)
             .try_into()
-            .map_err(D::Error::custom)?;
-        let condition = naming
-            .condition(MatchMode::Glob)
-            .map_err(D::Error::custom)?;
+            .map_err(|error: toml::de::Error| error.message().to_owned())?;
+        let condition = naming.condition(MatchMode::Glob)?;
         let says: Says = toml::Value::Table(says)
             .try_into()
-            .map_err(D::Error::custom)?;
-        let category = says.category.as_deref().map(interned);
+            .map_err(|error: toml::de::Error| error.message().to_owned())?;
         let remembered_as =
             (says.apply == Apply::Remember).then(|| interned(&condition.to_string()));
         Ok(Self {
             condition,
-            says,
-            category,
+            enabled,
             remembered_as,
+            ..Self::of_says(says)
         })
+    }
+
+    /// A rule that says `says` and names no window: what is given to one
+    /// window until it closes.
+    pub fn of_says(says: Says) -> Self {
+        Self {
+            category: says.category.as_deref().map(interned),
+            icon: says.icon.as_deref().map(interned),
+            app_id: says.app_id.as_deref().map(interned),
+            says,
+            ..Self::default()
+        }
+    }
+
+    /// Whether the rule is used.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// What the rule says.
+    pub fn says(&self) -> &Says {
+        &self.says
+    }
+
+    /// When the rule does what it says.
+    pub fn apply(&self) -> Apply {
+        self.says.apply
     }
 }
 
@@ -220,7 +319,7 @@ fn interned(text: &str) -> &'static str {
 
 impl RuleConfig {
     /// Why the rule cannot be used, if it cannot.
-    fn fault(&self) -> Option<&'static str> {
+    pub fn fault(&self) -> Option<&'static str> {
         let says = &self.says;
         let share = |value: f32| value.is_finite() && value > 0. && value <= 1.;
         let opaque = |opacity: Option<f32>| {
@@ -255,11 +354,16 @@ impl RuleConfig {
         if says.above == Some(true) && says.below == Some(true) {
             return Some("it keeps the window both `above` and `below`");
         }
+        if says.icon.as_deref().is_some_and(str::is_empty)
+            || says.app_id.as_deref().is_some_and(str::is_empty)
+        {
+            return Some("its `icon` or `app_id` is empty");
+        }
         None
     }
 
     /// Whether the rule names the window `named`.
-    fn matches(&self, named: &Named) -> bool {
+    pub fn matches(&self, named: &Named) -> bool {
         self.condition.holds(named)
     }
 }
@@ -293,6 +397,16 @@ pub struct Effective {
     /// What the frame of the window is remembered by, where a rule that
     /// remembers names it.
     pub remembered_as: Option<&'static str>,
+    /// Whether the window takes the keyboard when it is clicked.
+    pub accept_focus: Option<bool>,
+    /// Whether its close button can be used.
+    pub closeable: Option<bool>,
+    /// The picture the dock shows for the window, a file.
+    pub icon: Option<&'static str>,
+    /// The application the dock groups the window with.
+    pub app_id: Option<&'static str>,
+    /// How strictly the window is kept from taking the foreground.
+    pub focus: Option<FocusLevel>,
 }
 
 impl Effective {
@@ -300,6 +414,15 @@ impl Effective {
     fn of<'a>(rules: impl IntoIterator<Item = &'a RuleConfig>, named: &Named) -> Self {
         let mut effective = Self::default();
         for rule in rules.into_iter().filter(|rule| rule.matches(named)) {
+            effective.take_rule(rule);
+        }
+        effective
+    }
+
+    /// Takes what `rule` says over what was said before.
+    fn take_rule(&mut self, rule: &RuleConfig) {
+        let effective = self;
+        {
             let says = &rule.says;
             take(&mut effective.tile, says.float.map(|float| !float));
             take(&mut effective.tile, says.tile);
@@ -323,6 +446,11 @@ impl Effective {
             take(&mut effective.skip_dock, says.skip_dock);
             take(&mut effective.skip_switcher, says.skip_switcher);
             take(&mut effective.remembered_as, rule.remembered_as);
+            take(&mut effective.accept_focus, says.accept_focus);
+            take(&mut effective.closeable, says.closeable);
+            take(&mut effective.icon, rule.icon);
+            take(&mut effective.app_id, rule.app_id);
+            take(&mut effective.focus, says.focus);
             // A window kept above by a later rule is no longer kept
             // below by an earlier one, and the other way round.
             if says.above == Some(true) {
@@ -332,7 +460,6 @@ impl Effective {
                 effective.above = None;
             }
         }
-        effective
     }
 
     /// What this says that `before` did not: each of its parts that
@@ -363,12 +490,28 @@ impl Effective {
             skip_dock: new(self.skip_dock, before.skip_dock),
             skip_switcher: new(self.skip_switcher, before.skip_switcher),
             remembered_as: new(self.remembered_as, before.remembered_as),
+            accept_focus: new(self.accept_focus, before.accept_focus),
+            closeable: new(self.closeable, before.closeable),
+            icon: new(self.icon, before.icon),
+            app_id: new(self.app_id, before.app_id),
+            focus: new(self.focus, before.focus),
         }
     }
 
     /// Whether the window is to be placed at all.
     fn places(&self) -> bool {
         self.display.is_some() || self.position.is_some() || self.size.is_some()
+    }
+
+    /// Whether the rules say anything of where the window is or how
+    /// large: they place it, maximize or minimize it, have it fill its
+    /// display or open where the last one was.
+    fn places_at_all(&self) -> bool {
+        self.places()
+            || self.maximize.is_some()
+            || self.minimized.is_some()
+            || self.fullscreen.is_some()
+            || self.remembered_as.is_some()
     }
 
     /// How opaque the window is to be drawn, in front or not; `None` where
@@ -480,6 +623,22 @@ struct Seen {
     first: Instant,
     /// Where the rules put it, while it may still move by itself.
     placed: Option<ScreenRect>,
+    /// Whether it was open when the rules were read last, so that the
+    /// rules with `apply = "now"` were done to it.
+    open_at_reading: bool,
+}
+
+impl Seen {
+    fn new(named: Named, first: Instant, open_at_reading: bool) -> Self {
+        Self {
+            named,
+            effective: Effective::default(),
+            always: Effective::default(),
+            first,
+            placed: None,
+            open_at_reading,
+        }
+    }
 }
 
 /// The sets of rules of `rule_templates`, by their names.
@@ -493,9 +652,18 @@ impl Global for RuleTemplates {}
 pub struct Rules {
     rules: Vec<RuleConfig>,
     seen: HashMap<AppWindowId, Seen>,
+    /// The rules given to one window each until it closes, which are
+    /// never written; each has the last word for its window.
+    temporary: HashMap<AppWindowId, RuleConfig>,
+    /// Whether new windows are placed as `[window_actions] placement`
+    /// says, which needs the windows watched without rules as well.
+    placing: bool,
     /// Counts the tasks that were started to watch the windows; only the
     /// latest goes on.
     task: u64,
+    /// The task that watches the windows, once one was started for the
+    /// rules in use.
+    watching: Option<u64>,
     /// Whether it was said that `sticky` does nothing on the virtual
     /// desktops of Windows.
     told_sticky: bool,
@@ -540,13 +708,15 @@ impl Rules {
 
     /// Takes over the rules of a configuration that was read again, if they
     /// changed. The windows that are open already, when Tessera starts or
-    /// the rules change, count as seen: only the rules that apply always
-    /// and the sizes of `min_size` and `max_size` change them, and what a
-    /// rule that is gone or changed took from them is given back.
+    /// the rules change, count as seen: only the rules that apply always or
+    /// now and the sizes of `min_size` and `max_size` change them, and what
+    /// a rule that is gone or changed took from them is given back. Rules
+    /// with `enabled = false` are left out.
     pub fn configure(rules: &[RuleConfig], cx: &mut App) {
         let templates = cx.default_global::<RuleTemplates>().0.clone();
         let all = templates::rules_of_all(&templates);
         let usable: Vec<RuleConfig> = { all.iter().chain(rules) }
+            .filter(|rule| rule.is_enabled())
             .filter(|rule| match rule.fault() {
                 Some(fault) => {
                     report!("a `[[rule]]` is left out: {fault}");
@@ -560,36 +730,50 @@ impl Rules {
         if this.rules == usable && this.task > 0 {
             return;
         }
+        focus::guard(&usable);
         this.rules = usable;
         this.task += 1;
-        let task = this.task;
+        this.watching = None;
         // The windows there are now count as seen with the new rules.
         let windows = AppWindow::enumerate();
-        let rules = this.rules.clone();
+        let rules = std::mem::take(&mut this.rules);
         let mut changed = Vec::new();
         for window in &windows {
             let named = Named::of(window);
-            let seen = this.seen.entry(window.id).or_insert_with(|| Seen {
-                named: named.clone(),
-                effective: Effective::default(),
-                always: Effective::default(),
-                first: Instant::now(),
-                placed: None,
-            });
-            let before = seen.effective;
-            seen.effective = Effective::of(&rules, &named);
-            seen.always = Effective::of(always(&rules), &named);
+            let seen = { this.seen.entry(window.id) }
+                .or_insert_with(|| Seen::new(named.clone(), Instant::now(), true));
+            seen.open_at_reading = true;
             seen.named = named;
-            changed.push((window.id, before, seen.effective));
+            let before = seen.effective;
+            (seen.effective, seen.always) = judged(&rules, &this.temporary, window.id, seen);
+            let now = Effective::of(
+                rules.iter().filter(|rule| rule.apply() == Apply::Now),
+                &seen.named,
+            );
+            changed.push((window.clone(), before, seen.effective, now));
         }
+        this.rules = rules;
         Self::hand_over_tiling(cx);
-        for (id, before, now) in changed {
-            Self::undress(id, &before, &now);
-            Self::bound(id, &now, None, cx);
+        for (window, before, effective, now) in changed {
+            Self::undress(window.id, &before, &effective);
+            Self::bound(window.id, &effective, None, cx);
+            if now != Effective::default() {
+                Self::first_sight(&window, &now, cx);
+            }
         }
-        if rules.is_empty() {
+        Self::watch(cx);
+    }
+
+    /// Watches the windows for as long as there are rules, a window with a
+    /// rule of its own, or new windows to place, unless that is done.
+    fn watch(cx: &mut App) {
+        let this = cx.global_mut::<Self>();
+        let wanted = !this.rules.is_empty() || !this.temporary.is_empty() || this.placing;
+        if !wanted || this.watching == Some(this.task) {
             return;
         }
+        let task = this.task;
+        this.watching = Some(task);
         if !WindowEvents::watch() {
             report!("Windows does not report window changes, so rules apply late");
         }
@@ -625,8 +809,50 @@ impl Rules {
         };
         match this.seen.get(&window.id) {
             Some(seen) => seen.effective,
-            None => Effective::of(&this.rules, &Named::of(window)),
+            None => Effective::of(standing(&this.rules), &Named::of(window)),
         }
+    }
+
+    /// Gives the window `id` what `says` says until it closes, with the
+    /// last word over every rule, as if it applied always: KWin's "force
+    /// temporarily". Nothing is written to the configuration.
+    pub fn temporary(id: AppWindowId, says: Says, cx: &mut App) {
+        let Some(window) = AppWindow::of_id(id) else {
+            return;
+        };
+        if !cx.has_global::<Self>() {
+            return;
+        }
+        let this = cx.global_mut::<Self>();
+        let rule = RuleConfig::of_says(says);
+        this.temporary.insert(id, rule.clone());
+        let rules = std::mem::take(&mut this.rules);
+        let seen = { this.seen.entry(id) }
+            .or_insert_with(|| Seen::new(Named::of(&window), Instant::now(), false));
+        let before = seen.effective;
+        (seen.effective, seen.always) = judged(&rules, &this.temporary, id, seen);
+        let effective = seen.effective;
+        this.rules = rules;
+        Self::hand_over_tiling(cx);
+        Self::undress(id, &before, &effective);
+        let mut given = Effective::default();
+        given.take_rule(&rule);
+        Self::first_sight(&window, &given, cx);
+        Self::watch(cx);
+    }
+
+    /// Has new windows placed as `[window_actions] placement` says, or no
+    /// longer: they are watched for while it is on.
+    pub fn place_new_windows(on: bool, cx: &mut App) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+        let this = cx.global_mut::<Self>();
+        if this.placing == on {
+            return;
+        }
+        this.placing = on;
+        Self::watch(cx);
     }
 
     /// Takes in that the user ended moving or resizing the window `id`:
@@ -647,6 +873,7 @@ impl Rules {
         let windows = AppWindow::enumerate();
         let this = cx.global_mut::<Self>();
         this.seen.retain(|id, _| id.exists());
+        this.temporary.retain(|id, _| id.exists());
         let now = Instant::now();
         let mut new = Vec::new();
         let mut again = Vec::new();
@@ -662,19 +889,10 @@ impl Rules {
         for window in &windows {
             match this.seen.get_mut(&window.id) {
                 None => {
-                    let named = Named::of(window);
-                    let effective = Effective::of(&rules, &named);
-                    let always = Effective::of(always(&rules), &named);
-                    this.seen.insert(
-                        window.id,
-                        Seen {
-                            named,
-                            effective,
-                            always,
-                            first: now,
-                            placed: None,
-                        },
-                    );
+                    let mut seen = Seen::new(Named::of(window), now, false);
+                    (seen.effective, seen.always) =
+                        judged(&rules, &this.temporary, window.id, &seen);
+                    this.seen.insert(window.id, seen);
                     new.push(window.clone());
                 }
                 Some(seen) => {
@@ -686,8 +904,8 @@ impl Rules {
                     if title != seen.named.title {
                         seen.named.title = title;
                         let before = seen.effective;
-                        seen.effective = Effective::of(&rules, &seen.named);
-                        seen.always = Effective::of(always(&rules), &seen.named);
+                        (seen.effective, seen.always) =
+                            judged(&rules, &this.temporary, window.id, seen);
                         let newly = seen.effective.newly_said(&before);
                         let settling = now.duration_since(seen.first) < SETTLING;
                         if settling && newly != Effective::default() {
@@ -712,6 +930,11 @@ impl Rules {
                 .map(|seen| seen.effective);
             if let Some(effective) = effective {
                 Self::first_sight(&window, &effective, cx);
+                // A new window that no rule places is placed as
+                // `[window_actions] placement` says.
+                if cx.global::<Self>().placing && !effective.places_at_all() {
+                    crate::window_actions::WindowActions::place_new(&window, cx);
+                }
             }
         }
         for (window, newly) in late {
@@ -988,6 +1211,16 @@ impl Rules {
         {
             id.show_title_bar(!untitled);
         }
+        if let Some(accepts) = effective.accept_focus
+            && accepts != id.accepts_focus()
+        {
+            id.set_accepts_focus(accepts);
+        }
+        if let Some(closeable) = effective.closeable
+            && closeable != id.is_closeable()
+        {
+            id.set_closeable(closeable);
+        }
         if let Some(full) = effective.fullscreen
             && full != id.fills_display()
         {
@@ -1013,8 +1246,14 @@ impl Rules {
 
     /// Gives the window `id` back what a rule took from it that the rules
     /// `now` no longer take: its title bar, its frame, its place in the
-    /// order of windows and its opacity.
+    /// order of windows, its opacity, the keyboard and its close button.
     fn undress(id: AppWindowId, before: &Effective, now: &Effective) {
+        if before.accept_focus == Some(false) && now.accept_focus != Some(false) {
+            id.set_accepts_focus(true);
+        }
+        if before.closeable == Some(false) && now.closeable != Some(false) {
+            id.set_closeable(true);
+        }
         if before.no_titlebar == Some(true) && now.no_titlebar != Some(true) && id.title_bar_taken()
         {
             id.show_title_bar(true);
@@ -1037,6 +1276,34 @@ impl Rules {
 /// Those of `rules` that apply always.
 fn always(rules: &[RuleConfig]) -> impl Iterator<Item = &RuleConfig> {
     rules.iter().filter(|rule| rule.says.apply == Apply::Always)
+}
+
+/// Those of `rules` that apply to a window that appears after the rules
+/// were read: all but those that apply now.
+fn standing(rules: &[RuleConfig]) -> impl Iterator<Item = &RuleConfig> {
+    rules.iter().filter(|rule| rule.says.apply != Apply::Now)
+}
+
+/// What `rules` say of the window `id` that was seen as `seen`, and what
+/// those of them that apply always say, the rule it has until it closes in
+/// `temporary` having the last word in both. The rules that apply now
+/// count only for a window that was open when they were read.
+fn judged(
+    rules: &[RuleConfig],
+    temporary: &HashMap<AppWindowId, RuleConfig>,
+    id: AppWindowId,
+    seen: &Seen,
+) -> (Effective, Effective) {
+    let mut effective = match seen.open_at_reading {
+        true => Effective::of(rules, &seen.named),
+        false => Effective::of(standing(rules), &seen.named),
+    };
+    let mut always = Effective::of(always(rules), &seen.named);
+    if let Some(rule) = temporary.get(&id) {
+        effective.take_rule(rule);
+        always.take_rule(rule);
+    }
+    (effective, always)
 }
 
 /// Writes a `[[rule]]` for the window `id` into the configuration: one that
@@ -1108,7 +1375,7 @@ const FRAME_HOST: &str = "ApplicationFrameHost.exe";
 /// nothing more; else by its program and its window class. A window of
 /// the frame host whose application is not known, or of a program that
 /// cannot be read, is named by its title.
-fn naming(named: &Named) -> Vec<(&'static str, String)> {
+pub fn naming(named: &Named) -> Vec<(&'static str, String)> {
     if let Some(app) = &named.app {
         return vec![("app", app.clone())];
     }
@@ -1150,6 +1417,7 @@ mod tests {
             app: app.map(str::to_owned),
             title: title.to_owned(),
             class: class.to_owned(),
+            kind: None,
         }
     }
 
@@ -1343,6 +1611,130 @@ mod tests {
         assert!(rule("exe = \"re:(\"").is_err());
         assert!(rule("exe = \"(\"\nmatch = \"regex\"").is_err());
         assert!(rule("exe = \"a.exe\"\napply = \"sometimes\"").is_err());
+    }
+
+    #[test]
+    fn a_rule_can_be_switched_off() {
+        let rule = |text: &str| toml::from_str::<RuleConfig>(text);
+        assert!(rule("exe = \"a.exe\"\nfloat = true").unwrap().is_enabled());
+        let off = rule("exe = \"a.exe\"\nfloat = true\nenabled = false").unwrap();
+        assert!(!off.is_enabled());
+        assert_eq!(off.fault(), None);
+        assert!(rule("exe = \"a.exe\"\nenabled = \"no\"").is_err());
+        // What it says is still read and checked.
+        assert!(rule("exe = \"a.exe\"\nenabled = false\nfloats = true").is_err());
+    }
+
+    #[test]
+    fn the_policies_are_read_and_force_is_always() {
+        let apply = |text: &str| {
+            toml::from_str::<RuleConfig>(&format!("exe = \"a.exe\"\napply = \"{text}\""))
+                .map(|rule| rule.apply())
+        };
+        assert_eq!(apply("initially"), Ok(Apply::Initially));
+        assert_eq!(apply("always"), Ok(Apply::Always));
+        assert_eq!(apply("force"), Ok(Apply::Always));
+        assert_eq!(apply("remember"), Ok(Apply::Remember));
+        assert_eq!(apply("now"), Ok(Apply::Now));
+        assert!(apply("later").is_err());
+        for policy in Apply::ALL {
+            assert_eq!(apply(policy.word()), Ok(policy));
+        }
+    }
+
+    #[test]
+    fn a_rule_that_applies_now_counts_only_for_the_windows_open_then() {
+        let rules = rules(
+            r#"
+            [[rule]]
+            exe = "a.exe"
+            above = true
+            apply = "now"
+
+            [[rule]]
+            exe = "a.exe"
+            opacity = 0.8
+            "#,
+        );
+        let window = named("a.exe", None, "A", "A");
+        let open = Seen::new(window.clone(), Instant::now(), true);
+        let later = Seen::new(window, Instant::now(), false);
+        let none = HashMap::new();
+        let id = AppWindowId::from_raw(1);
+        let (effective, always) = judged(&rules, &none, id, &open);
+        assert_eq!(effective.above, Some(true));
+        assert_eq!(effective.opacity, Some(0.8));
+        assert_eq!(always, Effective::default());
+        let (effective, _) = judged(&rules, &none, id, &later);
+        assert_eq!(effective.above, None);
+        assert_eq!(effective.opacity, Some(0.8));
+    }
+
+    #[test]
+    fn a_rule_until_the_window_closes_has_the_last_word_always() {
+        let rules = rules("[[rule]]\nexe = \"a.exe\"\nopacity = 0.8\nabove = true");
+        assert!(toml::from_str::<RuleConfig>("opacity = 0.5\nclosable = false").is_err());
+        let given = toml::from_str::<RuleConfig>("opacity = 0.5\ncloseable = false").unwrap();
+        let id = AppWindowId::from_raw(7);
+        let temporary = HashMap::from([(id, RuleConfig::of_says(given.says().clone()))]);
+        let seen = Seen::new(named("a.exe", None, "A", "A"), Instant::now(), false);
+        let (effective, always) = judged(&rules, &temporary, id, &seen);
+        assert_eq!(effective.opacity, Some(0.5));
+        assert_eq!(effective.above, Some(true));
+        assert_eq!(effective.closeable, Some(false));
+        assert_eq!(always.opacity, Some(0.5));
+        // Another window does not have it.
+        let (other, _) = judged(&rules, &temporary, AppWindowId::from_raw(8), &seen);
+        assert_eq!(other.opacity, Some(0.8));
+    }
+
+    #[test]
+    fn the_new_attributes_are_taken_and_kept_once() {
+        let tool = rules(
+            r#"
+            [[rule]]
+            exe = "tool.exe"
+            accept_focus = false
+            closeable = false
+            icon = 'C:\Icons\tool.ico'
+            app_id = "Contoso.Tool"
+
+            [[rule]]
+            exe = "tool.exe"
+            title = "Main"
+            accept_focus = true
+            "#,
+        );
+        let palette = Effective::of(&tool, &named("tool.exe", None, "Palette", "T"));
+        assert_eq!(palette.accept_focus, Some(false));
+        assert_eq!(palette.closeable, Some(false));
+        assert_eq!(palette.icon, Some(r"C:\Icons\tool.ico"));
+        assert_eq!(palette.app_id, Some("Contoso.Tool"));
+        let main = Effective::of(&tool, &named("tool.exe", None, "Main", "T"));
+        assert_eq!(main.accept_focus, Some(true));
+        // The texts are kept once for all rules that give them.
+        let again = rules("[[rule]]\nexe = \"x.exe\"\napp_id = \"Contoso.Tool\"");
+        assert!(std::ptr::eq(
+            again[0].app_id.unwrap(),
+            palette.app_id.unwrap()
+        ));
+        let fault = |text: &str| toml::from_str::<RuleConfig>(text).unwrap().fault();
+        assert!(fault("exe = \"a.exe\"\nicon = \"\"").is_some());
+        assert!(fault("exe = \"a.exe\"\napp_id = \"\"").is_some());
+        assert_eq!(
+            palette.newly_said(&main).accept_focus,
+            Some(false),
+            "a change of accept_focus is newly said"
+        );
+    }
+
+    #[test]
+    fn a_rule_names_a_type_of_window() {
+        let rules = rules("[[rule]]\ntype = \"dialog\"\nfloat = true");
+        let mut window = named("a.exe", None, "Open", "#32770");
+        assert_eq!(Effective::of(&rules, &window).tile, None);
+        window.kind = Some(crate::platform::WindowKind::Dialog);
+        assert_eq!(Effective::of(&rules, &window).tile, Some(false));
     }
 
     #[test]

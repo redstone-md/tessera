@@ -51,6 +51,23 @@ pub fn rules_of(name: &str) -> Result<Vec<RuleConfig>, String> {
     Ok(file.remove("rule").unwrap_or_default())
 }
 
+/// The rules of the set `name` as the tables its file writes, for the
+/// editor of the rules to show and copy; none for a set there is not.
+pub fn tables_of(name: &str) -> Vec<toml::Table> {
+    let Some((_, text)) = TEMPLATES.iter().find(|(known, _)| *known == name) else {
+        return Vec::new();
+    };
+    let file: toml::Table = toml::from_str(text).unwrap_or_default();
+    {
+        file.get("rule")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+    }
+    .filter_map(|rule| rule.as_table().cloned())
+    .collect()
+}
+
 /// The rules of the sets `names`, in their order, each named once; a name
 /// that is no set is reported and left out.
 pub fn rules_of_all(names: &[String]) -> Vec<RuleConfig> {
@@ -82,6 +99,10 @@ mod tests {
             }
         }
         assert!(rules_of("nothing").is_err());
+        for name in names() {
+            assert_eq!(tables_of(name).len(), rules_of(name).unwrap().len());
+        }
+        assert!(tables_of("nothing").is_empty());
     }
 
     #[test]
@@ -93,6 +114,7 @@ mod tests {
             app: None,
             title: title.to_owned(),
             class: String::new(),
+            kind: None,
         };
         let page = super::super::Effective::of(&rules, &window("chrome.exe", "New Tab"));
         assert_eq!(page.category, Some("browser"));

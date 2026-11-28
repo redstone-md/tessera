@@ -764,3 +764,213 @@ fn program_of(hwnd: HWND, process: u32) -> (Option<PathBuf>, Option<String>) {
         (executable, app_id)
     }
 }
+
+// window-rules-editor: the styles and the owner of a window, the kind of
+// window they tell it is, and the window as the rules know it, read for
+// any window and not only for those a task switcher lists.
+
+use windows::Win32::UI::WindowsAndMessaging::{WS_CAPTION, WS_POPUP};
+
+/// The kind of a window, as KWin tells window types apart, read from its
+/// styles: a rule names windows of one kind with `type`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowKind {
+    /// A window of its own, with a title bar.
+    Normal,
+    /// A dialog: a window of the dialog class of Windows, or a popup with
+    /// a title bar that another window owns.
+    Dialog,
+    /// A window with a title bar that another window owns, as a palette
+    /// of tools is.
+    Utility,
+    /// A tool window, which Windows gives no button in the taskbar.
+    Tool,
+    /// A popup without a title bar that no window owns and that is the
+    /// only window of its program, as a picture shown while a program
+    /// starts is.
+    Splash,
+    /// A popup without a title bar.
+    Popup,
+}
+
+/// The class of the dialogs of Windows.
+const DIALOG_CLASS: &str = "#32770";
+
+impl WindowKind {
+    /// Every kind, in the order they are offered.
+    pub const ALL: [Self; 6] = [
+        Self::Normal,
+        Self::Dialog,
+        Self::Utility,
+        Self::Tool,
+        Self::Splash,
+        Self::Popup,
+    ];
+
+    /// The word a rule writes for it.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Dialog => "dialog",
+            Self::Utility => "utility",
+            Self::Tool => "tool",
+            Self::Splash => "splash",
+            Self::Popup => "popup",
+        }
+    }
+
+    /// The kind of a window of the styles `style` and `extended`, of the
+    /// class `class`, `owned` by another window or not; `alone` asks
+    /// whether it is the only window of its program, and is asked only for
+    /// a popup without a title bar that nobody owns.
+    pub fn of(
+        style: u32,
+        extended: u32,
+        class: &str,
+        owned: bool,
+        alone: impl FnOnce() -> bool,
+    ) -> Self {
+        let popup = style & WS_POPUP.0 != 0;
+        let caption = style & WS_CAPTION.0 == WS_CAPTION.0;
+        if extended & WS_EX_TOOLWINDOW.0 != 0 {
+            return Self::Tool;
+        }
+        if class == DIALOG_CLASS || (popup && owned && caption) {
+            return Self::Dialog;
+        }
+        if popup && !caption {
+            return match !owned && alone() {
+                true => Self::Splash,
+                false => Self::Popup,
+            };
+        }
+        match owned {
+            true => Self::Utility,
+            false => Self::Normal,
+        }
+    }
+}
+
+impl AppWindowId {
+    /// The style of the window (`GWL_STYLE`); 0 for one that is gone.
+    pub fn style(self) -> u32 {
+        // SAFETY: the call only reads a value of the window and gives 0
+        // for a handle whose window is gone.
+        unsafe { GetWindowLongPtrW(self.hwnd(), GWL_STYLE) as u32 }
+    }
+
+    /// The extended style of the window (`GWL_EXSTYLE`); 0 for one that
+    /// is gone.
+    pub fn extended_style(self) -> u32 {
+        // SAFETY: as in `style`.
+        unsafe { GetWindowLongPtrW(self.hwnd(), GWL_EXSTYLE) as u32 }
+    }
+
+    /// Whether Windows hides the window without its knowing, as it does
+    /// the windows of other virtual desktops.
+    pub fn is_cloaked(self) -> bool {
+        is_cloaked(self.hwnd())
+    }
+
+    /// Whether the window has a title bar of Windows' own (`WS_CAPTION`).
+    pub fn has_title_bar(self) -> bool {
+        self.style() & WS_CAPTION.0 == WS_CAPTION.0
+    }
+
+    /// The window that owns this one, as a window owns its dialogs.
+    pub fn owner(self) -> Option<Self> {
+        // SAFETY: the call only reads a relation of the window, and fails
+        // for a handle whose window is gone.
+        let owner = unsafe { GetWindow(self.hwnd(), GW_OWNER) }.ok()?;
+        (!owner.is_invalid()).then_some(Self(owner.0 as isize))
+    }
+
+    /// The kind of window its styles tell it is; `None` for one that is
+    /// gone. Nothing is asked of the window: its styles are read.
+    pub fn kind(self) -> Option<WindowKind> {
+        if !self.exists() {
+            return None;
+        }
+        let (style, extended) = (self.style(), self.extended_style());
+        let owned = self.owner().is_some();
+        let alone = || self.alone_in_process();
+        Some(WindowKind::of(style, extended, &self.class(), owned, alone))
+    }
+
+    /// Whether no other shown window that nobody owns belongs to the
+    /// program of this one.
+    fn alone_in_process(self) -> bool {
+        let process = self.process();
+        let mut handles: Vec<HWND> = Vec::new();
+        // SAFETY: `collect` receives the pointer to `handles`, which
+        // outlives the synchronous enumeration.
+        unsafe {
+            let _ = EnumWindows(Some(collect), LPARAM(&raw mut handles as isize));
+        }
+        !handles.into_iter().any(|hwnd| {
+            let other = Self(hwnd.0 as isize);
+            other != self
+                && other.process() == process
+                && other.is_shown()
+                && other.owner().is_none()
+        })
+    }
+}
+
+impl AppWindow {
+    /// The window `id` as the rules know it: its display, its program and
+    /// its packaged application, also for a window a task switcher does
+    /// not list, as a dialog or a tool window. `None` for one that is gone.
+    pub fn of_id(id: AppWindowId) -> Option<Self> {
+        if !id.exists() {
+            return None;
+        }
+        Some(Self::describe(id.hwnd(), id.process()))
+    }
+}
+
+#[cfg(test)]
+mod kind_tests {
+    use super::*;
+
+    const CAPTION: u32 = WS_CAPTION.0;
+    const POPUP: u32 = WS_POPUP.0;
+
+    #[test]
+    fn the_styles_tell_the_kind_of_a_window() {
+        let alone = || true;
+        let crowded = || false;
+        let kind =
+            |style, extended, class, owned| WindowKind::of(style, extended, class, owned, alone);
+        assert_eq!(kind(CAPTION, 0, "Notepad", false), WindowKind::Normal);
+        assert_eq!(
+            kind(CAPTION, WS_EX_TOOLWINDOW.0, "Tool", false),
+            WindowKind::Tool
+        );
+        assert_eq!(kind(POPUP | CAPTION, 0, "Save", true), WindowKind::Dialog);
+        assert_eq!(
+            kind(POPUP | CAPTION, 0, "#32770", false),
+            WindowKind::Dialog
+        );
+        assert_eq!(kind(CAPTION, 0, "Palette", true), WindowKind::Utility);
+        assert_eq!(kind(POPUP, 0, "Splash", false), WindowKind::Splash);
+        assert_eq!(
+            WindowKind::of(POPUP, 0, "Splash", false, crowded),
+            WindowKind::Popup
+        );
+        assert_eq!(kind(POPUP, 0, "Menu", true), WindowKind::Popup);
+        // A popup with a title bar that nobody owns is a window of its own.
+        assert_eq!(kind(POPUP | CAPTION, 0, "Main", false), WindowKind::Normal);
+    }
+
+    #[test]
+    fn every_kind_has_its_word() {
+        for kind in WindowKind::ALL {
+            let read: WindowKind = toml::Value::String(kind.word().to_owned())
+                .try_into()
+                .unwrap();
+            assert_eq!(read, kind);
+        }
+    }
+}

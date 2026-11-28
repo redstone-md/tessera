@@ -7,7 +7,9 @@
 //! window class, each matched as `match` says (a pattern with `*` and `?`
 //! by default), with `not = { ... }` for what a window must not be, and
 //! `any = [ ... ]` and `all = [ ... ]` for names of which one or all are
-//! to fit. Small and capital letters are alike everywhere.
+//! to fit. Small and capital letters are alike everywhere. `type` names
+//! the kind of window as its styles tell it (see [`WindowKind`]), which is
+//! compared as it is.
 
 use std::fmt;
 use std::path::Path;
@@ -15,7 +17,7 @@ use std::path::Path;
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
 
-use crate::platform::AppWindow;
+use crate::platform::{AppWindow, WindowKind};
 
 /// How the names of a rule are matched.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -171,6 +173,8 @@ pub struct Named {
     pub app: Option<String>,
     pub title: String,
     pub class: String,
+    /// The kind of window its styles tell it is.
+    pub kind: Option<WindowKind>,
 }
 
 impl Named {
@@ -183,6 +187,7 @@ impl Named {
             app: window.app_id.clone(),
             title: window.id.title(),
             class: window.id.class(),
+            kind: window.id.kind(),
         }
     }
 }
@@ -224,6 +229,8 @@ impl Field {
 pub enum Condition {
     /// The window has a name that fits: one it has not does not.
     Name(Field, Pattern),
+    /// The window is of this kind.
+    Kind(WindowKind),
     /// The window is not what the condition names.
     Not(Box<Condition>),
     /// The window is what one of the conditions names; none for an empty
@@ -245,6 +252,7 @@ impl Condition {
     pub fn holds(&self, named: &Named) -> bool {
         match self {
             Self::Name(field, pattern) => field.of(named).is_some_and(|name| pattern.matches(name)),
+            Self::Kind(kind) => named.kind == Some(*kind),
             Self::Not(condition) => !condition.holds(named),
             Self::Any(conditions) => conditions.iter().any(|condition| condition.holds(named)),
             Self::All(conditions) => conditions.iter().all(|condition| condition.holds(named)),
@@ -255,7 +263,7 @@ impl Condition {
     /// window.
     pub fn names_something(&self) -> bool {
         match self {
-            Self::Name(..) => true,
+            Self::Name(..) | Self::Kind(_) => true,
             Self::Not(condition) => condition.names_something(),
             Self::Any(conditions) | Self::All(conditions) => {
                 conditions.iter().any(Self::names_something)
@@ -283,6 +291,7 @@ impl fmt::Display for Condition {
                 let (key, mode) = (field.key(), pattern.mode.word());
                 write!(formatter, "{key} {mode} {:?}", pattern.text)
             }
+            Self::Kind(kind) => write!(formatter, "type {}", kind.word()),
             Self::Not(condition) => write!(formatter, "not({condition})"),
             Self::Any(conditions) => list(formatter, "any", conditions),
             Self::All(conditions) => list(formatter, "all", conditions),
@@ -300,6 +309,9 @@ pub struct Naming {
     app: Option<String>,
     title: Option<String>,
     class: Option<String>,
+    /// The kind of window.
+    #[serde(rename = "type")]
+    kind: Option<WindowKind>,
     /// How the names of this table and of the tables in it are matched,
     /// unless one of those says otherwise.
     #[serde(rename = "match")]
@@ -313,8 +325,8 @@ pub struct Naming {
 
 impl Naming {
     /// The keys a table of names has, which a rule leaves to it.
-    pub const KEYS: [&'static str; 9] = [
-        "exe", "path", "app", "title", "class", "match", "not", "any", "all",
+    pub const KEYS: [&'static str; 10] = [
+        "exe", "path", "app", "title", "class", "type", "match", "not", "any", "all",
     ];
 
     /// The condition the table stands for, its names matched as
@@ -333,6 +345,9 @@ impl Naming {
             if let Some(text) = text {
                 all.push(Condition::Name(field, Pattern::with_mode(text, mode)?));
             }
+        }
+        if let Some(kind) = self.kind {
+            all.push(Condition::Kind(kind));
         }
         if let Some(not) = &self.not {
             all.push(Condition::Not(Box::new(not.condition(mode)?)));
@@ -364,6 +379,7 @@ mod tests {
             app: None,
             title: title.to_owned(),
             class: class.to_owned(),
+            kind: Some(WindowKind::Normal),
         }
     }
 
@@ -485,6 +501,22 @@ mod tests {
         assert!(!condition("").names_something());
         assert!(!condition("any = []").names_something());
         assert!(condition("not = { exe = \"a\" }").names_something());
+    }
+
+    #[test]
+    fn a_type_names_the_kind_of_window() {
+        let dialog = condition("type = \"dialog\"");
+        let mut window = named("app.exe", "Save as", "#32770");
+        assert!(!dialog.holds(&window));
+        window.kind = Some(WindowKind::Dialog);
+        assert!(dialog.holds(&window));
+        window.kind = None;
+        assert!(!dialog.holds(&window));
+        assert!(dialog.names_something());
+        let not_splash = condition("exe = \"app.exe\"\nnot = { type = \"splash\" }");
+        assert!(not_splash.holds(&named("app.exe", "", "")));
+        assert_eq!(dialog.to_string(), "type dialog");
+        assert!(toml::from_str::<Naming>("type = \"window\"").is_err());
     }
 
     #[test]

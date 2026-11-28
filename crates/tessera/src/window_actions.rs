@@ -12,6 +12,12 @@
 //! pointer with `focus_follows_mouse`, and the action `kill-window` ends
 //! the program of a window that is clicked, once that is confirmed.
 //!
+//! Where the configuration asks for it, a double click and a turn of the
+//! wheel on a title bar, a turn of the wheel and the middle button with
+//! the key of `modifier` held, and a click on a window that is not in
+//! front do what it says (see [`mouse`]), and new windows are placed as
+//! `placement` says (see [`placement`]).
+//!
 //! The windows that Windows itself moves, by their title bar or border,
 //! are not drawn to edges: Windows moves them in a loop of its own that a
 //! program outside them cannot adjust without being loaded into them.
@@ -19,6 +25,8 @@
 //! Everything here is off unless the configuration asks for it.
 
 mod kill;
+pub mod mouse;
+pub mod placement;
 
 use std::time::Duration;
 
@@ -35,6 +43,11 @@ use crate::snap::unsnapped;
 use crate::tiling::Tiler;
 
 pub use kill::ask_to_kill;
+
+use self::mouse::{
+    InactiveClick, ModifierMiddle, ModifierWheel, MouseActions, TitleDouble, TitleWheel,
+};
+use self::placement::{Cascade, Placement};
 
 /// The time between two moves of a window that is being dragged.
 const FRAME: Duration = Duration::from_millis(16);
@@ -85,6 +98,18 @@ pub struct WindowActionsConfig {
     pub focus_delay: u32,
     /// Whether that window is also brought above the others.
     pub focus_raises: bool,
+    /// Where new windows go.
+    pub placement: Placement,
+    /// What a double click on a title bar does.
+    pub titlebar_double: TitleDouble,
+    /// What a turn of the wheel over a title bar does.
+    pub titlebar_wheel: TitleWheel,
+    /// What a turn of the wheel with `modifier` held does over a window.
+    pub modifier_wheel: ModifierWheel,
+    /// What the middle button with `modifier` held does to a window.
+    pub modifier_middle: ModifierMiddle,
+    /// What a click on a window that is not in front does.
+    pub inactive_click: InactiveClick,
 }
 
 impl Default for WindowActionsConfig {
@@ -96,6 +121,12 @@ impl Default for WindowActionsConfig {
             focus_follows_mouse: false,
             focus_delay: DEFAULT_FOCUS_DELAY,
             focus_raises: false,
+            placement: Placement::Windows,
+            titlebar_double: TitleDouble::Windows,
+            titlebar_wheel: TitleWheel::Nothing,
+            modifier_wheel: ModifierWheel::Nothing,
+            modifier_middle: ModifierMiddle::Nothing,
+            inactive_click: InactiveClick::Windows,
         }
     }
 }
@@ -108,6 +139,17 @@ impl WindowActionsConfig {
             on: true,
             delay: self.focus_delay.min(MOST_FOCUS_DELAY),
             raises: self.focus_raises,
+        }
+    }
+
+    /// The actions of the pointer this says.
+    fn mouse(&self) -> MouseActions {
+        MouseActions {
+            titlebar_double: self.titlebar_double,
+            titlebar_wheel: self.titlebar_wheel,
+            modifier_wheel: self.modifier_wheel,
+            modifier_middle: self.modifier_middle,
+            inactive_click: self.inactive_click,
         }
     }
 }
@@ -333,6 +375,8 @@ pub struct WindowActions {
     /// What the user chose of the keyboard following the pointer, taken
     /// while Tessera has Windows do otherwise.
     tracking: Option<ActiveTracking>,
+    /// The window a cascade placed last.
+    cascade: Cascade,
 }
 
 impl Global for WindowActions {}
@@ -374,6 +418,14 @@ impl WindowActions {
         }
         let middle = config.titlebar_middle != TitleClick::None;
         MouseHook::configure(config.modifier, middle);
+        let mouse = config.mouse();
+        if mouse.need_key() && config.modifier.is_none() {
+            report!(
+                "[window_actions] `modifier_wheel` and `modifier_middle` need a `modifier` to hold"
+            );
+        }
+        MouseHook::ask(mouse.asks(config.modifier.is_some()));
+        Rules::place_new_windows(config.placement != Placement::Windows, cx);
         match config.focus_follows_mouse {
             true => Self::take_tracking(config.tracking(), cx),
             false => Self::give_tracking_back(cx),
@@ -429,7 +481,35 @@ impl WindowActions {
             }
             PointerEvent::Release { at } => Self::release(at, cx),
             PointerEvent::Middle { window, at } => Self::middle(window, at, cx),
+            PointerEvent::TitleDouble { window } => {
+                mouse::title_double(cx.global::<Self>().config.titlebar_double, window);
+            }
+            PointerEvent::TitleWheel { window, up } => {
+                let wheel = cx.global::<Self>().config.titlebar_wheel;
+                mouse::title_wheel(wheel, window, up, cx);
+            }
+            PointerEvent::ModifierWheel { window, up } => {
+                let wheel = cx.global::<Self>().config.modifier_wheel;
+                mouse::modifier_wheel(wheel, window, up, cx);
+            }
+            PointerEvent::ModifierMiddle { window, .. } => {
+                let middle = cx.global::<Self>().config.modifier_middle;
+                mouse::modifier_middle(middle, window, cx);
+            }
+            PointerEvent::Activate { window } => window.activate(),
         }
+    }
+
+    /// Puts the new window `window` where `placement` says, as the rules
+    /// ask when they first see a window that no rule places.
+    pub fn place_new(window: &AppWindow, cx: &mut App) {
+        let Some(this) = cx.try_global::<Self>() else {
+            return;
+        };
+        let wanted = this.config.placement;
+        let mut cascade = std::mem::take(&mut cx.global_mut::<Self>().cascade);
+        placement::place(wanted, window, &mut cascade, cx);
+        cx.global_mut::<Self>().cascade = cascade;
     }
 
     /// Begins moving or resizing `window`, pressed with `button` at `at`.
@@ -615,6 +695,7 @@ pub fn give_back_on_quit(cx: &mut App) {
     cx.set_global(GivingBack);
     cx.on_app_quit(|cx| {
         AppWindowId::give_styles_back();
+        AppWindowId::give_focus_and_close_back();
         if let Some(this) = cx.try_global::<WindowActions>()
             && this.config.focus_follows_mouse
         {
@@ -723,5 +804,17 @@ mod tests {
         assert_eq!(config.titlebar_middle, TitleClick::Lower);
         assert!(toml::from_str::<WindowActionsConfig>("modifier = \"ctrl\"").is_err());
         assert!(toml::from_str::<WindowActionsConfig>("snap = 3").is_err());
+        let config: WindowActionsConfig = toml::from_str(
+            "placement = \"smart\"\ntitlebar_double = \"above\"\ntitlebar_wheel = \"opacity\"\n\
+             modifier_wheel = \"volume\"\nmodifier_middle = \"close\"\ninactive_click = \"activate-only\"",
+        )
+        .unwrap();
+        assert_eq!(config.placement, Placement::Smart);
+        assert_eq!(config.titlebar_double, TitleDouble::Above);
+        assert_eq!(config.titlebar_wheel, TitleWheel::Opacity);
+        assert_eq!(config.modifier_wheel, ModifierWheel::Volume);
+        assert_eq!(config.modifier_middle, ModifierMiddle::Close);
+        assert_eq!(config.inactive_click, InactiveClick::ActivateOnly);
+        assert!(toml::from_str::<WindowActionsConfig>("placement = \"random\"").is_err());
     }
 }

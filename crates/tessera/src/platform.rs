@@ -14,6 +14,7 @@ pub use win32::DesktopOptions;
 pub use win32::DisplayMode;
 pub use win32::EXPLORER_APP_ID;
 pub use win32::FileSearch;
+pub use win32::HookAsks;
 pub use win32::InputName;
 pub use win32::Occupation;
 pub use win32::OwnInput;
@@ -31,6 +32,8 @@ pub use win32::SystemZone;
 pub use win32::TileBorder;
 pub use win32::TrayPromotion;
 pub use win32::UriScheme;
+pub use win32::WindowKind;
+pub use win32::WindowPick;
 pub use win32::decode_with_wic;
 pub use win32::display_at;
 pub use win32::font_families;
@@ -107,6 +110,7 @@ pub use win32::{
 pub use win32::{FileJobEvent, FileJobState, FileJobs};
 pub use win32::{FileProperty, Properties, PropertyEdit, PropertyValue, split_items};
 pub use win32::{FilesStart, start_detached};
+pub use win32::{FocusGuard, FocusLevel};
 pub use win32::{
     FolderHandler, known_folder_path, start_explorer, started_by_files_fallback, tell_problem,
 };
