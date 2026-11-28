@@ -805,8 +805,8 @@ pub struct Config {
     #[serde(default)]
     pub tray: crate::tray_settings::TrayConfig,
     // Wave 3, spectacle-klipper: screenshots (folder, name, format, editor, keys).
-    // #[serde(default)]
-    // pub screenshot: crate::screenshot::ScreenshotConfig,
+    #[serde(default)]
+    pub screenshot: crate::screenshot::ScreenshotConfig,
     // Wave 3, files-terminal: the terminal of the file manager and the drop-down terminal.
     #[serde(default)]
     pub terminal: crate::terminal::TerminalConfig,

@@ -192,6 +192,7 @@ impl Shell {
         crate::window_actions::WindowActions::start(&config.window_actions, cx);
         Corners::start(&config.corners, cx);
         ClipHistory::start(&config.clipboard, cx);
+        crate::screenshot::Screenshots::configure(&config.screenshot, cx);
         Notices::configure(&config.notices, cx);
         crate::tray_settings::TraySettings::configure(&config.tray, cx);
         // The keys come last: what a `[[key]]` names is checked against
@@ -471,6 +472,7 @@ impl Shell {
         crate::window_actions::WindowActions::configure(&config.window_actions, cx);
         Corners::configure(&config.corners, cx);
         ClipHistory::configure(&config.clipboard, cx);
+        crate::screenshot::Screenshots::configure(&config.screenshot, cx);
         Night::configure(&config.night_light, cx);
         Notices::configure(&config.notices, cx);
         crate::tray_settings::TraySettings::configure(&config.tray, cx);

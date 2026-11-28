@@ -42,6 +42,7 @@ mod rules_editor;
 mod run;
 mod runner;
 mod runner_settings;
+mod screenshot;
 mod session;
 mod settings;
 mod settings_parts;
@@ -141,6 +142,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(windows_keys::WindowsKeysModule),
         Box::new(more_windows_keys::MoreWindowsKeysModule),
         Box::new(shortcuts::ShortcutsModule),
+        Box::new(screenshot::ScreenshotModule::of(&config.screenshot)),
         Box::new(winx::WinxModule),
         Box::new(workspaces::WorkspacesModule),
         Box::new(overview::OverviewModule),

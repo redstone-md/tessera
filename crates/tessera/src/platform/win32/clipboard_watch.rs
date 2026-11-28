@@ -16,6 +16,14 @@
 //!
 //! [`paste_into`] then presses Ctrl+V for the user in the window that was
 //! in front before the history was opened.
+//!
+//! Where the formats are kept (`[clipboard] formats`), the HTML and RTF a
+//! program offers beside a text are copied out with it, up to
+//! [`RICH_LIMIT`] bytes each, so that the text is put back with them. Each
+//! copy also says which program owned the clipboard, for the actions of
+//! the clipboard that leave some programs alone. [`put_on_clipboard`]
+//! puts something on the clipboard where no watch runs, as a screenshot
+//! that is copied does.
 #![allow(unsafe_code)]
 
 use std::cell::RefCell;
@@ -58,7 +66,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WINDOW_STYLE, WM_APP, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_DESTROY, WNDCLASSW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EVENT_SYSTEM_FOREGROUND, OBJID_WINDOW, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    EVENT_SYSTEM_FOREGROUND, GetWindowThreadProcessId, OBJID_WINDOW, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS,
 };
 use windows::core::{PCWSTR, w};
 
@@ -89,6 +98,10 @@ const DROPEFFECT_COPY: u32 = 1;
 /// The most characters of a text that is kept; a longer text is not.
 const TEXT_LIMIT: usize = 1 << 20;
 
+/// The most bytes of the HTML or the RTF kept beside a text; a format that
+/// is larger is left out, and the text is kept without it.
+const RICH_LIMIT: usize = 1 << 20;
+
 /// The most pixels of a picture that is kept (20 megapixels); a larger
 /// picture is not.
 const PIXEL_LIMIT: u64 = 20_000_000;
@@ -116,6 +129,34 @@ const CLASS: PCWSTR = w!("Tessera.ClipboardWatch");
 
 /// The key with the letter V.
 const VK_V: VIRTUAL_KEY = VIRTUAL_KEY(0x56);
+
+/// What a copy brought: what the history keeps of it, the rich text beside
+/// a text where the formats are kept, and the program it came from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Copied {
+    pub clip: Clip,
+    pub rich: Rich,
+    /// The file name of the program that owned the clipboard, as
+    /// `notepad.exe`, where Windows tells it.
+    pub source: Option<String>,
+}
+
+/// The formats of rich text offered beside a text, as the clipboard holds
+/// them; empty where none were, or they were not kept.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Rich {
+    /// `HTML Format`: a header of offsets, then the HTML, in UTF-8.
+    pub html: Option<Vec<u8>>,
+    /// `Rich Text Format`.
+    pub rtf: Option<Vec<u8>>,
+}
+
+impl Rich {
+    /// Whether it holds neither format.
+    pub fn is_empty(&self) -> bool {
+        self.html.is_none() && self.rtf.is_none()
+    }
+}
 
 /// What was copied, as the history keeps it.
 #[derive(Clone, Debug, PartialEq)]
@@ -176,17 +217,29 @@ impl Offer {
         }
     }
 
-    /// A picture: as a device-independent bitmap, which every program
-    /// reads and Windows turns into the other bitmap formats, and as the
-    /// PNG file `png`, which keeps its transparency for the programs that
-    /// read that format.
+    /// A picture: as a device-independent bitmap of version 5, which says
+    /// which bits are transparency and which Windows turns into the other
+    /// bitmap formats for every program, and as the PNG file `png`, which
+    /// keeps its transparency for the programs that read that format.
     pub fn image(pixels: &RgbaImage, png: Vec<u8>) -> Self {
         Self {
             formats: vec![
-                (Format::Standard(CF_DIB), dib_of(pixels)),
+                (Format::Standard(CF_DIBV5), dibv5_of(pixels)),
                 (Format::Named(PNG), png),
             ],
         }
+    }
+
+    /// The offer, with the HTML and RTF of `rich` beside its text, so that
+    /// a program that reads them pastes the text with its formatting.
+    pub fn with_rich(mut self, rich: &Rich) -> Self {
+        if let Some(html) = &rich.html {
+            self.formats.push((Format::Named(HTML), html.clone()));
+        }
+        if let Some(rtf) = &rich.rtf {
+            self.formats.push((Format::Named(RTF), rtf.clone()));
+        }
+        self
     }
 }
 
@@ -198,6 +251,8 @@ struct Shared {
     stop: AtomicBool,
     /// Whether pictures are kept.
     images: AtomicBool,
+    /// Whether the HTML and RTF beside a text are kept.
+    formats: AtomicBool,
     /// The window of another program that came in front last, as a
     /// number; zero before one did.
     front: AtomicIsize,
@@ -234,11 +289,12 @@ impl ClipboardWatch {
     /// receiver. A thread that cannot be started is the error; a window
     /// the thread cannot make is reported, and the receiver closes, as it
     /// does whenever the watch ends.
-    pub fn start(images: bool) -> Result<(Self, Receiver<Clip>), String> {
+    pub fn start(images: bool) -> Result<(Self, Receiver<Copied>), String> {
         let shared = Arc::new(Shared {
             window: AtomicIsize::new(0),
             stop: AtomicBool::new(false),
             images: AtomicBool::new(images),
+            formats: AtomicBool::new(false),
             front: AtomicIsize::new(0),
         });
         let (requests, waiting) = mpsc::channel();
@@ -254,6 +310,12 @@ impl ClipboardWatch {
     /// Keeps pictures from now on if `images`, or leaves them out.
     pub fn keep_images(&self, images: bool) {
         self.shared.images.store(images, Ordering::Relaxed);
+    }
+
+    /// Keeps the HTML and RTF beside a text from now on if `formats`, or
+    /// leaves them out.
+    pub fn keep_formats(&self, formats: bool) {
+        self.shared.formats.store(formats, Ordering::Relaxed);
     }
 
     /// The window of another program that was in front last while the
@@ -310,6 +372,67 @@ impl ClipboardWriter {
         }
         answered
     }
+}
+
+/// Puts `offer` on the clipboard in place of what is there, without a
+/// watch: a window of its own, made for the moment it takes, owns what is
+/// put there. Another program may hold the clipboard, which is waited for
+/// a moment, so it is to be called away from the thread that draws. A
+/// watch that runs takes what is put there for a new copy, as it would
+/// take a copy in another program.
+pub fn put_on_clipboard(offer: Offer) -> Result<(), String> {
+    // SAFETY: the call only reads the handle of the program.
+    let module = unsafe { GetModuleHandleW(None) }
+        .map_err(|error| format!("the module handle could not be read: {error}"))?;
+    static REGISTERED: OnceLock<bool> = OnceLock::new();
+    let registered = REGISTERED.get_or_init(|| {
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(put_window),
+            hInstance: module.into(),
+            lpszClassName: PUT_CLASS,
+            ..Default::default()
+        };
+        // SAFETY: the class structure and its strings outlive the call,
+        // and `put_window` has the signature of a window procedure.
+        unsafe { RegisterClassW(&raw const class) != 0 }
+    });
+    if !registered {
+        return Err("the window class could not be registered".to_owned());
+    }
+    // SAFETY: the class is registered and the strings are constants; the
+    // message-only window is destroyed below, on this thread.
+    let window = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            PUT_CLASS,
+            w!("Tessera clipboard"),
+            WINDOW_STYLE(0),
+            0,
+            0,
+            0,
+            0,
+            Some(HWND_MESSAGE),
+            None,
+            Some(module.into()),
+            None,
+        )
+    }
+    .map_err(|error| format!("no window could own the clipboard: {error}"))?;
+    let put = put(window, offer);
+    // SAFETY: the window was made on this thread above. What it put on the
+    // clipboard stays there: none of it is rendered late.
+    let _ = unsafe { DestroyWindow(window) };
+    put
+}
+
+/// The class of the windows [`put_on_clipboard`] makes.
+const PUT_CLASS: PCWSTR = w!("Tessera.ClipboardPut");
+
+/// The window procedure of [`put_on_clipboard`], which leaves every message
+/// to Windows.
+unsafe extern "system" fn put_window(window: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    // SAFETY: the arguments are passed on as they came.
+    unsafe { DefWindowProcW(window, message, w, l) }
 }
 
 /// Brings `window` in front and presses Ctrl+V in it, once the keys the
@@ -385,7 +508,7 @@ fn key(key: VIRTUAL_KEY, down: bool) -> INPUT {
 struct Watch {
     shared: Arc<Shared>,
     requests: mpsc::Receiver<Request>,
-    clips: Sender<Clip>,
+    clips: Sender<Copied>,
 }
 
 thread_local! {
@@ -395,7 +518,7 @@ thread_local! {
 
 /// The body of the thread of a watch: makes the window, has Windows tell
 /// it of changes, and handles messages until the watch is dropped.
-fn watch(shared: Arc<Shared>, requests: mpsc::Receiver<Request>, clips: Sender<Clip>) {
+fn watch(shared: Arc<Shared>, requests: mpsc::Receiver<Request>, clips: Sender<Copied>) {
     let window = match create_window() {
         Ok(window) => window,
         Err(error) => {
@@ -582,26 +705,53 @@ fn answer(window: HWND, message: u32) -> bool {
 /// itself, the copying program asked for it not to be kept, or it is
 /// nothing the history keeps.
 fn copied(window: HWND) {
-    let images = WATCH.with(|watch| {
+    let kept = WATCH.with(|watch| {
         let watch = watch.borrow();
-        watch
-            .as_ref()
-            .map(|watch| watch.shared.images.load(Ordering::Relaxed))
+        watch.as_ref().map(|watch| {
+            let shared = &watch.shared;
+            let images = shared.images.load(Ordering::Relaxed);
+            (images, shared.formats.load(Ordering::Relaxed))
+        })
     });
-    let Some(images) = images else {
+    let Some((images, formats)) = kept else {
         return;
     };
-    let Some(raw) = read(window, images) else {
+    let source = owner_program();
+    let Some((raw, rich)) = read(window, images, formats) else {
         return;
     };
     let Some(clip) = raw.into_clip() else {
         return;
     };
+    // Rich text goes with a text only.
+    let rich = match clip {
+        Clip::Text(_) => rich,
+        _ => Rich::default(),
+    };
+    let copied = Copied { clip, rich, source };
     WATCH.with(|watch| {
         if let Some(watch) = watch.borrow().as_ref() {
-            watch.clips.try_send(clip).ok();
+            watch.clips.try_send(copied).ok();
         }
     });
+}
+
+/// The file name of the program whose window owns the clipboard, as
+/// `notepad.exe`, where Windows tells it.
+fn owner_program() -> Option<String> {
+    // SAFETY: the calls only read which window owns the clipboard and
+    // whose it is; `process` outlives the call that fills it.
+    let process = unsafe {
+        let owner = GetClipboardOwner().ok()?;
+        let mut process = 0;
+        GetWindowThreadProcessId(owner, Some(&raw mut process));
+        process
+    };
+    if process == 0 {
+        return None;
+    }
+    let program = super::app_windows::executable_of(process)?;
+    Some(program.file_name()?.to_string_lossy().into_owned())
 }
 
 /// Puts the offers that wait on the clipboard, in the order they came.
@@ -751,10 +901,12 @@ enum Raw {
 /// Copies out of the clipboard what the history keeps of it: files first,
 /// then a plain text, then a picture (as a PNG where the program gave one,
 /// else as a bitmap) if `images`, then HTML and RTF to be read as text.
-/// Nothing is copied where the watch put it there itself, the program
-/// asked for it not to be kept, the clipboard stays held by another
-/// program, or what comes first is larger than is kept.
-fn read(window: HWND, images: bool) -> Option<Raw> {
+/// With `formats`, the HTML and RTF beside a text come too, each where it
+/// is no larger than [`RICH_LIMIT`]. Nothing is copied where the watch put
+/// it there itself, the program asked for it not to be kept, the clipboard
+/// stays held by another program, or what comes first is larger than is
+/// kept.
+fn read(window: HWND, images: bool, formats: bool) -> Option<(Raw, Rich)> {
     // SAFETY: the call only reads which window owns the clipboard.
     if unsafe { GetClipboardOwner() }.is_ok_and(|owner| owner == window) {
         return None;
@@ -763,29 +915,49 @@ fn read(window: HWND, images: bool) -> Option<Raw> {
     if excluded() {
         return None;
     }
+    let plain = |raw: Raw| Some((raw, Rich::default()));
     if holds(CF_HDROP) {
-        return Some(Raw::Files(files()));
+        return plain(Raw::Files(files()));
     }
     let text_bytes = (TEXT_LIMIT + 1) * size_of::<u16>();
     if let Some(text) = bytes(CF_UNICODETEXT, text_bytes) {
-        return text.map(Raw::Text);
+        let rich = match formats {
+            true => Rich {
+                html: bytes(format_named(HTML), RICH_LIMIT).flatten(),
+                rtf: bytes(format_named(RTF), RICH_LIMIT).flatten(),
+            },
+            false => Rich::default(),
+        };
+        return text.map(|text| (Raw::Text(text), rich));
     }
     if images {
         if let Some(png) = bytes(format_named(PNG), BYTE_LIMIT) {
-            return png.map(Raw::Png);
+            return png.and_then(|png| plain(Raw::Png(png)));
         }
         // The header of version 5 tells which bits are transparency, which
         // `CF_DIB` loses where Windows makes it of a `CF_DIBV5`.
         for format in [CF_DIBV5, CF_DIB] {
             if let Some(dib) = bytes(format, BYTE_LIMIT) {
-                return dib.map(Raw::Dib);
+                return dib.and_then(|dib| plain(Raw::Dib(dib)));
             }
         }
     }
+    // Rich text without a plain text beside it is kept as the text it
+    // reads as, and with its own format where the formats are kept.
     if let Some(html) = bytes(format_named(HTML), text_bytes) {
-        return html.map(Raw::Html);
+        let html = html?;
+        let rich = Rich {
+            html: (formats && html.len() <= RICH_LIMIT).then(|| html.clone()),
+            rtf: None,
+        };
+        return Some((Raw::Html(html), rich));
     }
-    bytes(format_named(RTF), text_bytes).flatten().map(Raw::Rtf)
+    let rtf = bytes(format_named(RTF), text_bytes).flatten()?;
+    let rich = Rich {
+        html: None,
+        rtf: (formats && rtf.len() <= RICH_LIMIT).then(|| rtf.clone()),
+    };
+    Some((Raw::Rtf(rtf), rich))
 }
 
 /// The files of the open clipboard, which holds `CF_HDROP`.
@@ -872,11 +1044,16 @@ fn decode(decoder: impl ImageDecoder) -> Option<RgbaImage> {
     Some(pixels)
 }
 
-/// The bytes of `CF_DIB` for `pixels`: a `BITMAPINFOHEADER` and the rows
-/// from the bottom up, four bytes a pixel in the order blue, green, red
-/// and alpha.
-fn dib_of(pixels: &RgbaImage) -> Vec<u8> {
-    const HEADER: u32 = 40;
+/// The bytes of `CF_DIBV5` for `pixels`: a `BITMAPV5HEADER` whose masks
+/// say where red, green, blue and alpha are, in the colours of sRGB, and
+/// the rows from the bottom up, four bytes a pixel in the order blue,
+/// green, red and alpha, the alpha not multiplied in.
+fn dibv5_of(pixels: &RgbaImage) -> Vec<u8> {
+    const HEADER: u32 = 124;
+    /// `BI_BITFIELDS`, `LCS_sRGB` and `LCS_GM_IMAGES`.
+    const BITFIELDS: u32 = 3;
+    const SRGB: u32 = 0x7352_4742;
+    const GM_IMAGES: u32 = 4;
     let (width, height) = pixels.dimensions();
     let size = width as usize * height as usize * 4;
     let mut bytes = Vec::with_capacity(HEADER as usize + size);
@@ -886,11 +1063,21 @@ fn dib_of(pixels: &RgbaImage) -> Vec<u8> {
     bytes.extend((height as i32).to_le_bytes());
     bytes.extend(1u16.to_le_bytes());
     bytes.extend(32u16.to_le_bytes());
-    // BI_RGB, then the size of the pixels, the resolutions and the colors
-    // of a palette, which it has none of.
-    bytes.extend(0u32.to_le_bytes());
+    bytes.extend(BITFIELDS.to_le_bytes());
     bytes.extend((size as u32).to_le_bytes());
+    // The resolutions and the colours of a palette, which it has none of.
     bytes.extend([0u8; 16]);
+    for mask in [0x00ff_0000u32, 0x0000_ff00, 0x0000_00ff, 0xff00_0000] {
+        bytes.extend(mask.to_le_bytes());
+    }
+    bytes.extend(SRGB.to_le_bytes());
+    // The end points and the gamma of a colour space of its own, unused
+    // for sRGB.
+    bytes.extend([0u8; 36 + 12]);
+    bytes.extend(GM_IMAGES.to_le_bytes());
+    // No profile, and the reserved field.
+    bytes.extend([0u8; 12]);
+    debug_assert_eq!(bytes.len(), HEADER as usize);
     for row in pixels.rows().rev() {
         for pixel in row {
             let [red, green, blue, alpha] = pixel.0;
@@ -1212,20 +1399,38 @@ mod tests {
     fn a_picture_is_put_as_a_bitmap_that_reads_the_same() {
         let mut pixels = RgbaImage::new(3, 2);
         for (x, y, pixel) in pixels.enumerate_pixels_mut() {
-            *pixel = image::Rgba([x as u8 * 80, y as u8 * 120, 7, 255]);
+            *pixel = image::Rgba([x as u8 * 80, y as u8 * 120, 7, 100 + x as u8]);
         }
-        let dib = dib_of(&pixels);
-        assert_eq!(dib.len(), 40 + 3 * 2 * 4);
+        let dib = dibv5_of(&pixels);
+        assert_eq!(dib.len(), 124 + 3 * 2 * 4);
+        assert_eq!(&dib[..4], 124u32.to_le_bytes());
+        // The mask of alpha, after those of red, green and blue.
+        assert_eq!(&dib[52..56], 0xff00_0000u32.to_le_bytes());
         // The first row of the bitmap is the bottom row of the picture.
-        assert_eq!(&dib[40..44], [7, 120, 0, 255]);
+        assert_eq!(&dib[124..128], [7, 120, 0, 100]);
         assert_eq!(decode_dib(&dib), Some(pixels));
     }
 
     #[test]
     fn a_bitmap_without_transparency_is_opaque() {
         let pixels = RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 0]));
-        let decoded = decode_dib(&dib_of(&pixels)).unwrap();
+        let decoded = decode_dib(&dibv5_of(&pixels)).unwrap();
         assert!(decoded.pixels().all(|pixel| pixel.0 == [10, 20, 30, 255]));
+    }
+
+    #[test]
+    fn rich_text_goes_beside_the_text_it_was_copied_with() {
+        let rich = Rich {
+            html: Some(b"<b>x</b>".to_vec()),
+            rtf: None,
+        };
+        assert!(!rich.is_empty() && Rich::default().is_empty());
+        let offer = Offer::text("x").with_rich(&rich);
+        let formats: Vec<Format> = offer.formats.iter().map(|(format, _)| *format).collect();
+        assert_eq!(
+            formats,
+            [Format::Standard(CF_UNICODETEXT), Format::Named(HTML)]
+        );
     }
 
     #[test]

@@ -46,6 +46,7 @@ mod power_warnings;
 mod preview;
 mod rules;
 mod runners;
+mod screenshot;
 mod session;
 mod shell;
 mod shell_entries;

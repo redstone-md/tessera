@@ -1,3 +1,113 @@
 # Rows of the settings filled by spectacle-klipper. Format: modules/settings/rows.rs
 # (RowCard, and [[action]] titles). Plain labels are English texts of the
 # RUSSIAN table in i18n.rs.
+
+# [clipboard]: the history of the clipboard and what it keeps.
+
+[[card]]
+section = "Clipboard and screenshots"
+title = "Clipboard history"
+table = "clipboard"
+search = ["Win+V", "Paste", "Pinned"]
+
+[[card.row]]
+key = "enabled"
+kind = "toggle"
+label = "Keep a history of the clipboard"
+description = "What is copied is kept while Tessera runs; off forgets all but the pinned items. Win+V follows it at the next start."
+default = true
+
+[[card.row]]
+key = "size"
+kind = "number"
+label = "Items kept"
+description = "Besides the pinned ones."
+min = 1
+max = 200
+step = 1
+default = 25
+
+[[card.row]]
+key = "images"
+kind = "toggle"
+label = "Keep pictures"
+description = "As PNG files in cache\\clipboard of the configuration directory, while they are in the history."
+default = true
+
+[[card.row]]
+key = "formats"
+kind = "toggle"
+label = "Keep the formatting of texts"
+description = "The HTML and RTF a program copies beside a text, up to a megabyte each, are kept with it, so that it is pasted again with its formatting."
+default = false
+
+# [screenshot]: where pictures go, what they are called and the keys.
+
+[[card]]
+section = "Clipboard and screenshots"
+title = "Screenshots"
+table = "screenshot"
+search = ["PrtScn", "Win+Shift+S", "Snipping Tool", "Region"]
+
+[[card.row]]
+key = "folder"
+kind = "path"
+pick = "folder"
+label = "Folder"
+description = "Where screenshots are saved."
+optional = true
+unset_label = "Screenshots in Pictures"
+
+[[card.row]]
+key = "name"
+kind = "text"
+label = "Name"
+description = "The name of a file without its extension: %Y, %m, %d, %H, %M, %S and the other codes of strftime for when it was taken, %N for the number Windows counts screenshots with."
+default = "Screenshot %Y-%m-%d %H%M%S"
+
+[[card.row]]
+key = "format"
+kind = "choice"
+label = "Format"
+default = "png"
+choices = [
+    { value = "png", label = "PNG" },
+    { value = "jpeg", label = "JPEG" },
+    { value = "webp", label = "WebP" },
+]
+
+[[card.row]]
+key = "editor_after"
+kind = "toggle"
+label = "Open the editor after a screenshot"
+description = "Instead of saving it, where the key or the button does not say what to do."
+default = false
+
+[[card.row]]
+key = "cursor"
+kind = "toggle"
+label = "Show the pointer in screenshots"
+default = false
+
+[[card.row]]
+key = "own_print_screen"
+kind = "toggle"
+label = "PrtScn opens the region tool"
+description = "And Alt+PrtScn takes the window in front, where Tessera answers the keys of Windows. Windows 11 gives PrtScn to the Snipping Tool otherwise. Takes effect at the next start."
+default = false
+
+[[card.row]]
+key = "snip"
+kind = "choice"
+label = "Win+Shift+S opens"
+description = "Takes effect at the next start."
+default = "windows"
+choices = [
+    { value = "windows", label = "The Snipping Tool" },
+    { value = "tessera", label = "Tessera's region tool" },
+]
+
+[[action]]
+name = "screenshot"
+title = "Take a screenshot"
+arg = "all, display, window, under-pointer or region; then edit, copy or save; delay=0 to 10"

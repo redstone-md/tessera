@@ -7,8 +7,9 @@
 //!
 //! - `open` opens what its `arg` names through the Shell: Win+I the
 //!   settings, Win+U those of accessibility, Win+K the wireless displays,
-//!   Win+G the Game Bar, Win+Shift+S the snipping of the screen and
-//!   Win+Pause the page About;
+//!   Win+G the Game Bar, Win+Shift+S the snipping of the screen (unless
+//!   `[screenshot] snip` gives it to Tessera's region tool, see
+//!   [`take_snip`]) and Win+Pause the page About;
 //! - `start` (Ctrl+Esc), `search` (Win+S, Win+Q), `quick-settings`
 //!   (Win+A) and `notification-center` (Win+N) open the popup their
 //!   `arg` names, or without one, for `start`, the popup of the Windows
@@ -16,14 +17,16 @@
 //!   it), and `launcher`, `quick-settings` and `calendar`; the module
 //!   brings the popup `quick-settings`, made of the widgets of the
 //!   connections, the radios, the volume and the brightness;
-//! - `screenshot` (Win+PrtScn) saves a picture of all displays in the
-//!   Screenshots folder;
+//! - `screenshot`, with Win+PrtScn and the other keys of screenshots, is
+//!   brought by `modules/screenshot.rs`, which knows `[screenshot]`;
 //! - `dock` (Win+1 to Win+9) does what a click on the button of that
 //!   number in the dock does, as `dock = n` of a `[[key]]` does; the dock
 //!   brings its other keys.
 //!
 //! Win+L stays with Windows, which locks the session itself; so do
 //! Ctrl+Shift+Esc and the keys that switch the input language.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::anyhow;
 use gpui::App;
@@ -32,8 +35,23 @@ use crate::actions::{Action, Actions};
 use crate::config::{PopupConfig, WidgetSpec};
 use crate::module::{Module, WidgetRegistry};
 use crate::modules::windows::Docks;
-use crate::platform::{Launch, save_screenshot};
+use crate::platform::Launch;
 use crate::shell::Shell;
+
+/// Whether Win+Shift+S is left to Tessera's region tool, which
+/// `[screenshot] snip = "tessera"` asks for; `open` then does not bring it.
+static SNIP_TAKEN: AtomicBool = AtomicBool::new(false);
+
+/// The press of the snipping of the screen.
+pub const SNIP: &str = "win+shift+s";
+
+/// Has `open` leave Win+Shift+S to the region tool from now on, if
+/// `taken`, or bring it to the Snipping Tool again. It is to be called as
+/// the modules are made, before their actions are collected, as the module
+/// of screenshots does from what `[screenshot]` says.
+pub fn take_snip(taken: bool) {
+    SNIP_TAKEN.store(taken, Ordering::Relaxed);
+}
 
 /// What the keys of `open` open, as Explorer opens them.
 const OPENED: [(&str, &str); 6] = [
@@ -122,7 +140,11 @@ impl WindowsKeysModule {
                         .to_owned(),
                 ),
             });
+        let snip_taken = SNIP_TAKEN.load(Ordering::Relaxed);
         for (press, target) in OPENED {
+            if press == SNIP && snip_taken {
+                continue;
+            }
             open = open.by_default(press, Some(target));
         }
         let mut all = vec![("open", open)];
@@ -144,10 +166,6 @@ impl WindowsKeysModule {
             }
             all.push((name, action));
         }
-        let screenshot = Action::new(|_, cx| screenshot(cx))
-            .taking_reserved_keys()
-            .by_default("win+printscreen", None);
-        all.push(("screenshot", screenshot));
         let mut dock = Action::new(|number, cx| {
             let number = number.and_then(|number| number.parse().ok());
             Docks::press(number.unwrap_or(0), cx);
@@ -177,17 +195,6 @@ fn toggle(name: &str, cx: &mut App) {
     Shell::toggle_popup(name.trim(), cx);
 }
 
-/// Saves a picture of every display, away from the thread that draws.
-fn screenshot(cx: &mut App) {
-    cx.background_executor()
-        .spawn(async {
-            if let Err(error) = save_screenshot() {
-                report!("no screenshot was saved: {error:#}");
-            }
-        })
-        .detach();
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,8 +219,8 @@ mod tests {
         assert_eq!(bound("win+q"), Some(("search".to_owned(), None)));
         assert_eq!(bound("ctrl+escape"), Some(("start".to_owned(), None)));
         assert_eq!(
-            bound("win+printscreen"),
-            Some(("screenshot".to_owned(), None))
+            bound(SNIP),
+            Some(("open".to_owned(), Some("ms-screenclip:".to_owned())))
         );
         assert_eq!(bound("win+l"), None, "Windows locks by itself");
         let mut presses: Vec<&str> = keys.iter().map(|key| key.press.as_str()).collect();
@@ -242,11 +249,10 @@ mod tests {
         assert_eq!(actions.check("quick-settings", None), Ok(()));
         assert_eq!(actions.check("search", Some("runner")), Ok(()));
         assert!(actions.check("search", Some(" ")).is_err());
-        assert!(actions.check("screenshot", Some("now")).is_err());
         assert_eq!(actions.check("dock", Some("3")), Ok(()));
         assert!(actions.check("dock", Some("10")).is_err());
         assert!(actions.check("dock", None).is_err());
-        for name in ["open", "start", "search", "screenshot", "dock"] {
+        for name in ["open", "start", "search", "dock"] {
             assert!(actions.takes_reserved_keys(name));
         }
     }
@@ -256,7 +262,7 @@ mod tests {
         let mut actions = Actions::default();
         actions.register("open", Action::new(|_, _| {})).unwrap();
         assert!(WindowsKeysModule.actions(&mut actions).is_err());
-        for name in ["start", "search", "quick-settings", "screenshot", "dock"] {
+        for name in ["start", "search", "quick-settings", "dock"] {
             assert!(actions.get(name).is_some(), "`{name}` is missing");
         }
     }

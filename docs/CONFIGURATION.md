@@ -157,6 +157,7 @@ In `command`, `%f` is the first path chosen, `%F` all of them, `%d` the folder o
 enabled = true   # keep what is copied; false forgets all but the pinned items
 size = 25        # items kept besides the pinned ones, 1 to 200
 images = true    # keep pictures too, as PNG files in cache\clipboard of the configuration directory
+formats = false  # keep the HTML and RTF copied beside a text, up to 1 MB each, and paste them again with it
 
 [[key]]
 press = "win+v"
@@ -166,6 +167,35 @@ action = "clipboard"   # the popup "clipboard", noting the window in front to pa
 The widget `clipboard` is the list, for a popup, and the popup `clipboard` holds it: 440 by 560 pixels at the middle of the bar, unless a `[[popup]]` of the same name says otherwise (`place = "center"` puts it in the middle of the display). The widget `clipboard-button` is a button of a bar that opens it. In the list the arrows choose an item, Enter or a click puts it back on the clipboard and presses Ctrl+V in the window that was in front, Delete (with nothing written in the search) takes it out, and Esc closes the popup; the buttons of a row pin it, take it out, or open the web address it is. **Clear all** keeps the pinned items. Pinned items are written to `clipboard.toml` in the configuration directory, which Tessera rewrites; the pictures among them stay in `cache\clipboard`. A `clipboard.toml` that cannot be read is reported and left as it is, and pins made then are not written until Tessera starts again, so that it can be mended without losing them.
 
 Where `windows_keys` binds the keys of Windows, Win+V is bound to `clipboard` only when `enabled` was true as Tessera started; with `enabled = false` it stays with the history of Windows. A change of `enabled` moves Win+V at the next start. A `[[key]]` that names the action, as above, takes Win+V either way.
+
+With `formats = true` the `HTML Format` and `Rich Text Format` a program copies beside a text are kept with it, each where it is no larger than a megabyte, and go back on the clipboard with the text when it is pasted, so that a word processor or a mail program pastes it with its formatting; they are kept in memory only, not in `clipboard.toml`, so a pinned text comes back after a restart as plain text. Turning `formats` off lets go of those kept so far. The settings show these four keys in the card **Clipboard history** of the section **Clipboard and screenshots**.
+## Screenshots
+
+`[screenshot]` sets where the action `screenshot` saves pictures, what they are called, and which keys of Windows Tessera takes for them (see [FEATURES.md](FEATURES.md)):
+
+```toml
+[screenshot]
+folder = 'D:\Pictures\Shots'       # where pictures are saved; the Screenshots folder of Pictures without it
+name = "Screenshot %Y-%m-%d %H%M%S"  # strftime codes for when it was taken, %N for the number Windows counts with
+format = "png"                       # png, jpeg or webp
+editor_after = false                 # open the editor after a screenshot that is not told what to do
+cursor = false                       # the pointer in the picture
+own_print_screen = false             # PrtScn opens the region tool, Alt+PrtScn takes the window in front
+snip = "windows"                     # what Win+Shift+S opens: "windows" (the Snipping Tool) or "tessera"
+
+[[key]]
+press = "ctrl+printscreen"
+action = "screenshot"
+arg = "under-pointer,copy,delay=3"
+```
+
+A name that is taken gets ` (2)`, ` (3)` and on before its extension; with `%N`, as `name = "Screenshot (%N)"`, the numbers are those Windows counts its own screenshots with, as Win+PrtScn names them in Windows, and Windows counts on from the one taken. A name with a code chrono does not know is reported, and the default is used; `\ / : * ? " < > |` become `-`. JPEG has no transparency, so a picture saved as JPEG is opaque; WebP is written without loss.
+
+Windows 11 gives PrtScn to the Snipping Tool, and Win+Shift+S opens it too. With `own_print_screen = true` Tessera takes PrtScn for the region tool and Alt+PrtScn for the window in front, and with `snip = "tessera"` Win+Shift+S opens the region tool in place of the Snipping Tool; all three only where `windows_keys` binds the keys of Windows, and a change takes effect at the next start. A `[[key]]` that names the action takes its keys either way.
+
+The widget `screenshot` is a button of a bar that opens the popup `screenshot` (320 by 420 pixels): the five kinds of screenshot, the seconds to wait first (0 to 10) and what to do afterwards (Save, Copy or Edit), which the popup keeps while Tessera runs. With `mode = "region"` (or `all`, `display`, `window`, `under-pointer`) and `delay = 3` the button takes that screenshot at once instead. The widget `screenshot-modes` is the list, for a popup of your own, with `delay` and `then` (`save`, `copy`, `edit`) for what it chooses at first.
+
+In the region tool, a drag draws the rectangle, across displays too, the handles at its corners and sides and a drag inside move it, the arrows move it by a pixel and Shift with the arrows moves its right or bottom side; a click without a drag takes the window under the pointer as the picture shows it, or the display where there is none; Enter or a double click takes it, and Esc or the right button ends the tool without a picture. In the editor, Ctrl+C copies, Ctrl+S saves into the folder, Ctrl+Shift+S saves as a file chosen in the dialog (PNG, JPEG or WebP by its extension, PNG with the extension added for any other), Ctrl+Z and Ctrl+Y undo and redo, Ctrl with the wheel, Ctrl+plus and Ctrl+minus zoom and Ctrl+0 fits the picture to the window. The settings show these keys in the card **Screenshots** of the section **Clipboard and screenshots**.
 ## The window switcher
 
 The window switcher opens for a `[[key]]` with `switch = "next"` or `"previous"`, or one with `action = "switcher"`, and `[switcher]` sets how it looks and which windows it offers:
@@ -277,9 +307,9 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `inhibit` | `on`, `off`, or none | blocks sleep and screen locking until it is switched off or Tessera quits, or lets go of that; without `arg` the other way than it is. Brings no key |
 | `performance` | `off`, `minimal`, `extreme`, `auto`, or none | puts that [performance mode](#displays-power-performance-and-meters) in force by hand, or without `arg` the next one; `auto` gives the choice back to `[performance]`. Brings no key |
 | `input-language` | `next`, `previous`, `list`, or none | asks the window in front for the next keyboard layout, or the one before with `previous`; where a window of Tessera is in front, Tessera takes on that layout itself. `list` opens the popup `keyboard-list`, whose choice is for the window that was in front before it. Brings Win+Space and Win+Shift+Space (`previous`) |
-| `open` | a file, a program, a folder or an address | opens it through the Shell, as a double click does. Brings Win+I (`ms-settings:`), Win+U (`ms-settings:easeofaccess`), Win+K (`ms-settings-connectabledevices:devicediscovery`), Win+G (`ms-gamebar:`), Win+Shift+S (`ms-screenclip:`) and Win+Pause (`ms-settings:about`) |
+| `open` | a file, a program, a folder or an address | opens it through the Shell, as a double click does. Brings Win+I (`ms-settings:`), Win+U (`ms-settings:easeofaccess`), Win+K (`ms-settings-connectabledevices:devicediscovery`), Win+G (`ms-gamebar:`), Win+Shift+S (`ms-screenclip:`, the Snipping Tool, unless `[screenshot] snip = "tessera"` gives the key to `screenshot region`) and Win+Pause (`ms-settings:about`) |
 | `start`, `search`, `quick-settings`, `notification-center` | the name of a popup, or none | opens that popup, or closes it; without `arg`, for `start` (Ctrl+Esc) the popup of `windows_key`, the same one the Windows key opens, or the launcher where `windows_key` names none, `launcher` for `search` (Win+S, Win+Q), `quick-settings` (Win+A; the built-in layout has this popup with the tiles of the [quick settings](#quick-settings), and for a layout without it the module brings one with the connections, the switches of Wi-Fi and Bluetooth, the volume and the brightness) and `calendar` (Win+N) |
-| `screenshot` | none | saves a picture of all displays as `Screenshot (N).png` in the Screenshots folder of Pictures, N counted on from where Windows counts. Brings Win+PrtScn |
+| `screenshot` | `all`, `display`, `window`, `under-pointer` or `region`, then `,edit`, `,copy` or `,save`, then `,delay=N` (0 to 10), as `region,copy,delay=3`; none for `all` | takes a screenshot of all displays, the display under the pointer, the window in front, the window under the pointer, or a rectangle chosen in the region tool, after N seconds counted down on the screen, and opens it in the editor, puts it on the clipboard or saves it as `[screenshot]` names it (see [Screenshots](#screenshots)); without `edit`, `copy` or `save`, the editor where `editor_after` is on and else saving. Asked again while the seconds run, it stops the count. Its keys are taken from Windows. Brings Win+PrtScn (`all,save`), PrtScn (`region`) and Alt+PrtScn (`window`) with `own_print_screen = true`, and Win+Shift+S (`region`) with `snip = "tessera"` |
 | `dock` | 1 to 9 | does what `dock = n` does: what a click on the button of that number in the dock does. Brings no key |
 | `pin` | the path of a program, a shortcut, a file or a folder, a link, `separator` or a name of the Start menu | pins it to the dock, after the pins, unless it is pinned; `tessera pin` does the same from a console. Brings no key |
 | `unpin` | what `pin` takes | unpins it, a path whatever its slashes and case; `tessera unpin` does the same. Brings no key |

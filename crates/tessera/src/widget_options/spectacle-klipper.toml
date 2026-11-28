@@ -2,3 +2,63 @@
 # ([[widget]] with a name, then [[widget.setting]] entries, each an
 # OptionDecl whose key is the option). Plain labels are English texts of
 # the RUSSIAN table in i18n.rs.
+
+# The button of screenshots on a bar.
+
+[[widget]]
+name = "screenshot"
+
+[[widget.setting]]
+key = "mode"
+kind = "choice"
+label = "A click"
+description = "Opens the popup of screenshots, or takes one at once."
+default = "popup"
+choices = [
+    { value = "popup", label = "Opens the popup" },
+    { value = "all", label = "All displays" },
+    { value = "display", label = "Display under the pointer" },
+    { value = "window", label = "Window in front" },
+    { value = "under-pointer", label = "Window under the pointer" },
+    { value = "region", label = "Rectangle" },
+]
+
+[[widget.setting]]
+key = "delay"
+kind = "number"
+label = "Delay"
+description = "Seconds counted down before a screenshot taken at once."
+min = 0
+max = 10
+step = 1
+unit = "s"
+default = 0
+
+# The list of the popup of screenshots.
+
+[[widget]]
+name = "screenshot-modes"
+
+[[widget.setting]]
+key = "delay"
+kind = "number"
+label = "Delay"
+description = "The seconds chosen when the list first opens."
+min = 0
+max = 10
+step = 1
+unit = "s"
+default = 0
+
+[[widget.setting]]
+key = "then"
+kind = "choice"
+label = "Afterwards"
+description = "What is chosen to be done with a screenshot when the list first opens."
+optional = true
+unset_label = "As [screenshot] says"
+choices = [
+    { value = "save", label = "Save" },
+    { value = "copy", label = "Copy" },
+    { value = "edit", label = "Edit" },
+]

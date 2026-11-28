@@ -243,9 +243,14 @@
 #                      (start: ctrl+escape; search: win+s and win+q),
 #                      "quick-settings" (win+a), which the module brings,
 #                      and "calendar" (win+n)
-#             screenshot  saves a picture of all displays as
-#                      Screenshot (N).png in Pictures\Screenshots, N
-#                      counted on as Windows counts (win+printscreen)
+#             screenshot  arg "all", "display", "window",
+#                      "under-pointer" or "region", then ",edit", ",copy"
+#                      or ",save", then ",delay=N" (0 to 10): a picture of
+#                      that, after N seconds, edited, copied or saved as
+#                      [screenshot] below says (win+printscreen
+#                      "all,save"; printscreen "region" and
+#                      alt+printscreen "window" with own_print_screen;
+#                      win+shift+s "region" with snip = "tessera")
 #             dock     what dock above does with the number arg names,
 #                      1 to 9; it brings no key
 #             install-resource  follows the tessera:// link arg names:
@@ -626,10 +631,47 @@
 #   size     how many items are kept besides the pinned ones (25, 1 to 200)
 #   images   whether pictures are kept (true); each is a PNG file in
 #            cache/clipboard of this directory until it leaves the history
+#   formats  whether the HTML and RTF a program copies beside a text are
+#            kept with it, up to a megabyte each, so that the text is
+#            pasted again with its formatting (false); without them, or
+#            with Paste as plain text, it is pasted as plain text
 # [clipboard]
 # enabled = true
 # size = 25
 # images = true
+# formats = false
+
+# [screenshot] says where the action screenshot saves pictures and which
+# keys of Windows it takes. A picture is taken with Windows.Graphics.Capture
+# (GDI and PrintWindow where that is not there) at the density of each
+# display; the region tool shows the frozen picture on every display, and
+# the editor draws on it, blurs, pixelates and crops it.
+#   folder            where pictures are saved (the Screenshots folder of
+#                     Pictures)
+#   name              the name of a file without its extension: strftime
+#                     codes for when it was taken, and %N for the number
+#                     Windows counts screenshots with; a name that is
+#                     taken gets " (2)" and on
+#   format            "png", "jpeg" (opaque) or "webp" (without loss)
+#   editor_after      whether the editor opens after a screenshot that is
+#                     not told what to do (false: it is saved, and a
+#                     banner offers Open, Edit, Show in folder and Copy)
+#   cursor            whether the pointer is in the picture (false)
+#   own_print_screen  whether PrtScn opens the region tool and Alt+PrtScn
+#                     takes the window in front, where windows_keys binds
+#                     the keys of Windows; Windows 11 gives PrtScn to the
+#                     Snipping Tool otherwise (false, at the next start)
+#   snip              what Win+Shift+S opens: "windows", the Snipping
+#                     Tool, or "tessera", the region tool (at the next
+#                     start)
+# [screenshot]
+# folder = 'D:\Pictures\Shots'
+# name = "Screenshot %Y-%m-%d %H%M%S"
+# format = "png"
+# editor_after = false
+# cursor = false
+# own_print_screen = false
+# snip = "windows"
 
 # The notices Tessera gives where Explorer would, listed with the
 # notifications and shown as banners where [notifications] shows banners
