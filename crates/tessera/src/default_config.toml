@@ -376,6 +376,17 @@
 #                      keys to hold of its press are let go (done by
 #                      `tessera do`, until it is done again); where the
 #                      keys of Windows are in use it takes win+comma
+#             pin      pins arg to the dock: the path of a program, a
+#                      shortcut, a file or a folder, a link such as
+#                      "https://example.org", or "separator"; no key.
+#                      `tessera pin <path|link>` does the same from a
+#                      console, a relative path taken from where it runs
+#             unpin    unpins what arg names; `tessera unpin` likewise
+#             import-taskbar-pins  appends the pins of the taskbar of
+#                      Windows that are not pinned yet; no key
+#             pin-verb arg "on" offers "Pin to Tessera dock" in the
+#                      menus of files, folders and shortcuts (written for
+#                      the user only), "off" takes it away again
 #
 # [[key]]
 # press = "win+v"
@@ -814,6 +825,19 @@
 #               Its keys where windows_keys is on: win+1 to win+9 (dock),
 #               win+shift+n (dock-new), win+ctrl+n (dock-cycle),
 #               win+alt+n (dock-menu) and win+t (dock-focus)
+#               A pin may also be the path of a file or a folder, a link
+#               such as "https://example.org" or "mailto:me@example.org"
+#               (it shows the icon of the program that opens its kind),
+#               or "separator", a thin line. Buttons are dragged into
+#               another order; a pin dragged off the dock is unpinned,
+#               and what other programs drop on the dock is pinned where
+#               it is dropped, or opened with the pinned application it
+#               is dropped on. Option sort also takes "manual": the
+#               pins, then the others in the order they were dragged
+#               into, kept in dock-order.toml. Option pinned_on, "every"
+#               or "primary": only the dock of the primary display shows
+#               the pins. Option audio, false: no speaker on the buttons
+#               of applications that play sound
 #   "tiling"    whether and how windows are tiled; a click goes on to the
 #               next layout, and after the last one to no tiling
 #   "appearance" a sun while Windows is light and a moon while it is
@@ -1616,6 +1640,9 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 #                     logical pixels
 # With layout = true, Win+Space (the action input-language) also lists the
 # installed layouts, the one switched to lit, while the Windows key is held.
+# With volume = true another default output is shown by its name whenever
+# Windows takes one, whoever chose it; with microphone = true, another
+# default microphone.
 #
 # In shell mode Windows shows no indicator of its own.
 

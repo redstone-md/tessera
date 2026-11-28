@@ -5,16 +5,22 @@
 //! microphones there are to choose from, the volume of each of them and of
 //! each application that plays, and whether spatial sound is on.
 
+use std::collections::HashMap;
 use std::ptr;
-use std::sync::Once;
+use std::sync::{Mutex, Once};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use windows::Win32::Foundation::{PROPERTYKEY, S_OK};
-use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
+use windows::Win32::Media::Audio::Endpoints::{IAudioEndpointVolume, IAudioMeterInformation};
 use windows::Win32::Media::Audio::{
-    AudioSessionStateExpired, DEVICE_STATE_ACTIVE, EDataFlow, ERole, IAudioSessionControl2,
-    IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator, ISimpleAudioVolume, MMDeviceEnumerator,
-    eCapture, eCommunications, eConsole, eMultimedia, eRender,
+    AudioSessionStateActive, AudioSessionStateExpired, DEVICE_STATE_ACTIVE, EDataFlow, ERole,
+    IAudioSessionControl2, IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator,
+    ISimpleAudioVolume, MMDeviceEnumerator, eCapture, eCommunications, eConsole, eMultimedia,
+    eRender,
+};
+use windows::Win32::Media::Audio::{
+    DEVICE_STATE, IMMNotificationClient, IMMNotificationClient_Impl,
 };
 use windows::Win32::Media::Audio::{ISpatialAudioClient, ISpatialAudioObjectRenderStream};
 use windows::Win32::System::Com::{
@@ -24,6 +30,7 @@ use windows::core::{GUID, HRESULT, HSTRING, IUnknown, IUnknown_Vtbl, Interface, 
 
 use super::app_windows::executable_of;
 use super::packaged::take;
+use super::processes::{Kin, RunningProcess, ancestry};
 
 /// The name of a device as the sound settings show it.
 const FRIENDLY_NAME: PROPERTYKEY = PROPERTYKEY {
@@ -179,9 +186,8 @@ pub struct AppSound {
 }
 
 impl AppSound {
-    /// The streams of the default output that are not over, each with the
-    /// name of its program.
-    fn streams() -> Result<Vec<(String, ISimpleAudioVolume)>> {
+    /// The sessions of the default output that are not over.
+    fn sessions() -> Result<Vec<IAudioSessionControl2>> {
         // SAFETY: plain COM calls on interfaces owned here.
         unsafe {
             let sessions = default_endpoint(eRender)?
@@ -189,7 +195,7 @@ impl AppSound {
                 .context("the audio output does not tell what plays")?
                 .GetSessionEnumerator()
                 .context("the audio streams cannot be listed")?;
-            let mut streams = Vec::new();
+            let mut found = Vec::new();
             for index in 0..sessions.GetCount().unwrap_or(0) {
                 let Ok(session) = sessions.GetSession(index) else {
                     continue;
@@ -197,21 +203,37 @@ impl AppSound {
                 let Ok(session) = session.cast::<IAudioSessionControl2>() else {
                     continue;
                 };
-                if session.GetState() == Ok(AudioSessionStateExpired) {
-                    continue;
-                }
-                let program = if session.IsSystemSoundsSession() == S_OK {
-                    Some(String::new())
-                } else {
-                    let path = session.GetProcessId().ok().and_then(executable_of);
-                    path.and_then(|path| Some(path.file_stem()?.to_string_lossy().into_owned()))
-                };
-                if let (Some(program), Ok(volume)) = (program, session.cast()) {
-                    streams.push((program, volume));
+                if session.GetState() != Ok(AudioSessionStateExpired) {
+                    found.push(session);
                 }
             }
-            Ok(streams)
+            Ok(found)
         }
+    }
+
+    /// The name of the program of `session`, empty for the sounds of
+    /// Windows; `None` where it is not known.
+    fn program_of(session: &IAudioSessionControl2) -> Option<String> {
+        // SAFETY: COM calls without pointer arguments.
+        unsafe {
+            if session.IsSystemSoundsSession() == S_OK {
+                return Some(String::new());
+            }
+            let path = session.GetProcessId().ok().and_then(executable_of)?;
+            Some(path.file_stem()?.to_string_lossy().into_owned())
+        }
+    }
+
+    /// The streams of the default output that are not over, each with the
+    /// name of its program.
+    fn streams() -> Result<Vec<(String, ISimpleAudioVolume)>> {
+        let mut streams = Vec::new();
+        for session in Self::sessions()? {
+            if let (Some(program), Ok(volume)) = (Self::program_of(&session), session.cast()) {
+                streams.push((program, volume));
+            }
+        }
+        Ok(streams)
     }
 
     /// The programs that play through the default output, the sounds of
@@ -266,6 +288,105 @@ impl AppSound {
         Self::each(program, |stream| unsafe {
             stream.SetMute(muted, ptr::null())
         })
+    }
+}
+
+/// What one stream of the default output does at the moment, as the dock
+/// shows it on the button of the application that plays it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StreamSound {
+    /// The process that plays it, then the process that started that one
+    /// where it runs the same program, and so on up: a browser plays from
+    /// a process it started, whose windows are those of the browser's own
+    /// process.
+    pub lineage: Vec<u32>,
+    /// The name of its program file without its ending, as
+    /// [`AppSound::set_muted`] takes it.
+    pub program: String,
+    /// Whether the stream is open for playing, rather than idle.
+    pub active: bool,
+    /// The loudest it was since it was read last, from 0 to 1.
+    pub peak: f32,
+    /// From 0 to 1, a share of the volume of the output.
+    pub volume: f32,
+    pub muted: bool,
+}
+
+/// How many processes up from the one that plays are looked at for the
+/// application of a stream.
+const LINEAGE: usize = 4;
+
+/// For how long the processes and their parents, read once, are taken as
+/// they were.
+const PARENTS_KEPT: Duration = Duration::from_secs(10);
+
+/// The parents of the processes as they were read last, and when.
+static PARENTS: Mutex<Option<(Instant, HashMap<u32, Kin>)>> = Mutex::new(None);
+
+/// The parent of each process, read again where `process` is unknown or
+/// the list is older than [`PARENTS_KEPT`].
+fn parents_knowing(processes: &[u32]) -> HashMap<u32, Kin> {
+    let mut kept = PARENTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let fresh = kept.as_ref().is_some_and(|(read, parents)| {
+        read.elapsed() < PARENTS_KEPT && processes.iter().all(|id| parents.contains_key(id))
+    });
+    if !fresh {
+        *kept = Some((Instant::now(), RunningProcess::parents()));
+    }
+    kept.as_ref()
+        .map(|(_, parents)| parents.clone())
+        .unwrap_or_default()
+}
+
+impl AppSound {
+    /// Every stream of the default output that is not over, but the sounds
+    /// of Windows: who plays it, whether it plays now and how loud. It
+    /// asks Windows several things for each stream and may read the list
+    /// of processes: not for the thread of GPUI.
+    pub fn playing() -> Result<Vec<StreamSound>> {
+        let mut found = Vec::new();
+        for session in Self::sessions()? {
+            let Some(program) = Self::program_of(&session).filter(|name| !name.is_empty()) else {
+                continue;
+            };
+            // SAFETY: COM calls without pointer arguments on interfaces
+            // owned here.
+            let (process, active, peak, volume, muted) = unsafe {
+                let process = session.GetProcessId().unwrap_or(0);
+                let active = session.GetState() == Ok(AudioSessionStateActive);
+                let meter = session.cast::<IAudioMeterInformation>().ok();
+                let peak = match (active, meter) {
+                    (true, Some(meter)) => meter.GetPeakValue().unwrap_or(0.),
+                    _ => 0.,
+                };
+                let level = session.cast::<ISimpleAudioVolume>().ok();
+                let volume = { level.as_ref() }.and_then(|level| level.GetMasterVolume().ok());
+                let muted = { level.as_ref() }
+                    .and_then(|level| level.GetMute().ok())
+                    .is_some_and(|muted| muted.as_bool());
+                (process, active, peak, volume.unwrap_or(1.), muted)
+            };
+            found.push((process, program, active, peak, volume, muted));
+        }
+        let processes: Vec<u32> = found.iter().map(|(process, ..)| *process).collect();
+        let parents = match processes.is_empty() {
+            true => HashMap::new(),
+            false => parents_knowing(&processes),
+        };
+        let streams =
+            found.into_iter().map(
+                |(process, program, active, peak, volume, muted)| StreamSound {
+                    lineage: ancestry(process, &parents, LINEAGE),
+                    program,
+                    active,
+                    peak,
+                    volume,
+                    muted,
+                },
+            );
+        Ok(streams.collect())
     }
 }
 
@@ -350,6 +471,110 @@ impl AudioOutput {
         // SAFETY: the event context may be null.
         unsafe { self.endpoint.SetMute(muted, ptr::null()) }
             .context("the mute state cannot be changed")
+    }
+}
+
+/// The device Windows took for ordinary sound, as [`DefaultDeviceWatch`]
+/// tells it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefaultDevice {
+    /// Whether it is the microphone; the output otherwise.
+    pub input: bool,
+    /// What Windows knows the device by, as [`AudioDevice::id`] gives it.
+    pub id: String,
+}
+
+/// Tells, for as long as it is kept, each time Windows takes another
+/// device as the default output or microphone, whoever chose it
+/// (`IMMNotificationClient::OnDefaultDeviceChanged`).
+pub struct DefaultDeviceWatch {
+    devices: IMMDeviceEnumerator,
+    client: IMMNotificationClient,
+}
+
+impl DefaultDeviceWatch {
+    /// Starts telling on the channel returned.
+    pub fn start() -> Result<(Self, async_channel::Receiver<DefaultDevice>)> {
+        let devices = enumerator()?;
+        let (told, heard) = async_channel::unbounded();
+        let client: IMMNotificationClient = DeviceClient { told }.into();
+        // SAFETY: the client stays alive while it is registered: this
+        // holds it, and `Drop` unregisters it first.
+        unsafe { devices.RegisterEndpointNotificationCallback(&client) }
+            .context("changes of the audio devices cannot be heard")?;
+        Ok((Self { devices, client }, heard))
+    }
+}
+
+impl Drop for DefaultDeviceWatch {
+    fn drop(&mut self) {
+        // SAFETY: the client was registered with this enumerator.
+        let _ = unsafe {
+            self.devices
+                .UnregisterEndpointNotificationCallback(&self.client)
+        };
+    }
+}
+
+/// What Windows calls to tell of changes of the audio devices, from a
+/// thread of its own: only a change of the default device for ordinary
+/// sound is passed on, each change being told once for each role.
+#[windows::core::implement(IMMNotificationClient)]
+struct DeviceClient {
+    told: async_channel::Sender<DefaultDevice>,
+}
+
+#[allow(non_snake_case, reason = "the names of the methods of COM")]
+impl IMMNotificationClient_Impl for DeviceClient_Impl {
+    fn OnDeviceStateChanged(&self, _: &PCWSTR, _: DEVICE_STATE) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnDeviceAdded(&self, _: &PCWSTR) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnDeviceRemoved(&self, _: &PCWSTR) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnDefaultDeviceChanged(
+        &self,
+        flow: EDataFlow,
+        role: ERole,
+        id: &PCWSTR,
+    ) -> windows::core::Result<()> {
+        if role != eConsole || (flow != eRender && flow != eCapture) || id.is_null() {
+            return Ok(());
+        }
+        // SAFETY: Windows passes a NUL-terminated name, valid during the
+        // call; it is copied.
+        let Ok(id) = (unsafe { id.to_string() }) else {
+            return Ok(());
+        };
+        let input = flow == eCapture;
+        self.told.try_send(DefaultDevice { input, id }).ok();
+        Ok(())
+    }
+
+    fn OnPropertyValueChanged(&self, _: &PCWSTR, _: &PROPERTYKEY) -> windows::core::Result<()> {
+        Ok(())
+    }
+}
+
+impl AudioDevice {
+    /// What the sound settings call the device Windows knows by `id`;
+    /// `None` where it is gone or has no name.
+    pub fn name_of(id: &str) -> Option<String> {
+        let id = HSTRING::from(id);
+        // SAFETY: `id` outlives the call that reads it; the value read is
+        // owned here.
+        let name = unsafe {
+            let device = enumerator().ok()?.GetDevice(&id).ok()?;
+            let store = device.OpenPropertyStore(STGM_READ).ok()?;
+            store.GetValue(&FRIENDLY_NAME).ok()?.to_string()
+        };
+        (!name.is_empty()).then_some(name)
     }
 }
 

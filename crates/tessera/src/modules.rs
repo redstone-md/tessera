@@ -77,6 +77,8 @@ pub use settings::Settings;
 #[allow(unused_imports, reason = "for the Shortcuts page of shortcuts-editor")]
 pub(crate) use settings::{ActionTitle, action_titles};
 pub use shortcuts::record_for_window;
+#[allow(unused_imports, reason = "for the Dock card of settings-core")]
+pub(crate) use windows::Pin;
 
 /// Every module the shell starts with; the last one loads extensions.
 pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {

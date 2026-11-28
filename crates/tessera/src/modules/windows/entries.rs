@@ -4,7 +4,7 @@
 //! What the menu of a button of the dock offers: the documents and tasks
 //! of its application, its windows, another window, starting it as an
 //! administrator, its file, the window menu, pinning, and closing or
-//! ending it.
+//! ending it; for a separator, removing it.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use gpui::App;
 
-use super::{DockItem, FILES_APP, pin_name, repin, with, without};
+use super::pins::{Pin, removed};
+use super::{DockItem, FILES_APP, pin_name, repin, with};
 use crate::actions::Actions;
 use crate::i18n::Language;
 use crate::menu::MenuEntry;
@@ -48,16 +49,20 @@ pub(super) fn jump_app(item: &DockItem) -> Option<(String, Option<PathBuf>)> {
         return Some((EXPLORER_APP_ID.to_owned(), None));
     }
     let window = item.front();
-    let pin = item.pin.as_ref();
+    let pin = item.pin.as_ref().filter(|pin| pin.shortcut().is_some());
+    // Of the other pins only an application has a jump list.
+    if window.is_none() && pin.is_none() {
+        return None;
+    }
     let packaged = window
         .and_then(|window| window.app_id.clone())
-        .or_else(|| pin.and_then(|pin| pin.app.clone()));
+        .or_else(|| pin.and_then(Pin::app).map(str::to_owned));
     // A packaged application has no program file to hand a document to.
     let program = match packaged {
         Some(_) => None,
         None => window
             .and_then(|window| window.executable.clone())
-            .or_else(|| pin.and_then(|pin| pin.program.clone())),
+            .or_else(|| pin.and_then(Pin::program).map(PathBuf::from)),
     };
     let app = packaged
         .or_else(|| window.and_then(|window| window.id.stated_app_id()))
@@ -80,7 +85,7 @@ fn jump_entries(item: &DockItem, cx: &mut App) -> Vec<MenuEntry> {
 /// manager, which is Tessera, and for a window nothing is known of.
 pub(super) fn another(item: &DockItem) -> Option<Shortcut> {
     if let Some(pin) = &item.pin {
-        return Some(pin.shortcut.clone());
+        return pin.shortcut().cloned();
     }
     let front = item.front().filter(|window| !window.is_own())?;
     let executable = front.program()?;
@@ -98,7 +103,7 @@ fn file_of(item: &DockItem) -> Option<PathBuf> {
         return None;
     }
     if let Some(pin) = &item.pin {
-        return pin.app.is_none().then(|| pin.shortcut.path.clone());
+        return pin.location().map(PathBuf::from);
     }
     let front = item.front()?;
     match front.app_id {
@@ -180,9 +185,20 @@ fn end_task(windows: Vec<AppWindowId>, cx: &mut App) {
 /// window, pinning or unpinning it, closing its windows, and ending its
 /// task or its process.
 pub(super) fn entries(item: &DockItem, cx: &mut App) -> Vec<MenuEntry> {
-    let mut entries = jump_entries(item, cx);
     let language = Language::of(cx);
     let say = |text: &'static str| language.say(text);
+    if let Some(pin) = item.pin.as_ref().filter(|pin| pin.is_separator()) {
+        let (place, entry) = (pin.place, pin.entry.clone());
+        return vec![MenuEntry::new(
+            ICON_UNPIN,
+            say("Remove separator"),
+            move |cx| {
+                let entry = entry.clone();
+                repin(cx, move |pins| removed(pins, place, &entry));
+            },
+        )];
+    }
+    let mut entries = jump_entries(item, cx);
     if item.windows.len() > 1 {
         entries.extend(item.windows.iter().map(|window| {
             let id = window.id;
@@ -190,7 +206,11 @@ pub(super) fn entries(item: &DockItem, cx: &mut App) -> Vec<MenuEntry> {
         }));
     }
     let runs = item.front().is_some();
-    if item.is_files() || another(item).is_some() {
+    let opens = item
+        .pin
+        .as_ref()
+        .is_some_and(|pin| pin.shortcut().is_none());
+    if item.is_files() || another(item).is_some() || (opens && !runs) {
         let label = match runs {
             true => say("New window"),
             false => say("Open"),
@@ -202,16 +222,16 @@ pub(super) fn entries(item: &DockItem, cx: &mut App) -> Vec<MenuEntry> {
     }
     if let Some(file) = file_of(item) {
         let elevated = file.clone();
-        entries.push(MenuEntry::new(
-            ICON_ADMIN,
-            say("Run as administrator"),
-            move |_| {
+        // Only an application is started as an administrator.
+        let program = item.pin.as_ref().is_none_or(|pin| pin.shortcut().is_some());
+        entries.extend(program.then(|| {
+            MenuEntry::new(ICON_ADMIN, say("Run as administrator"), move |_| {
                 Launch::new(&elevated)
                     .verb("runas")
                     .named(format!("`{}`", elevated.display()))
                     .start();
-            },
-        ));
+            })
+        }));
         entries.push(MenuEntry::new(
             ICON_FOLDER,
             say("Open file location"),
@@ -246,9 +266,10 @@ pub(super) fn entries(item: &DockItem, cx: &mut App) -> Vec<MenuEntry> {
         .and_then(AppWindow::program);
     match (&item.pin, executable) {
         (Some(pin), _) => {
-            let name = pin.shortcut.name.clone();
+            let (place, entry) = (pin.place, pin.entry.clone());
             entries.push(MenuEntry::new(ICON_UNPIN, say("Unpin"), move |cx| {
-                repin(cx, |pins| without(pins, &name));
+                let entry = entry.clone();
+                repin(cx, move |pins| removed(pins, place, &entry));
             }));
         }
         (None, Some(executable)) => {
@@ -257,7 +278,8 @@ pub(super) fn entries(item: &DockItem, cx: &mut App) -> Vec<MenuEntry> {
                 ICON_PIN,
                 say("Pin to the dock"),
                 move |cx| {
-                    repin(cx, |pins| with(pins, &name));
+                    let name = name.clone();
+                    repin(cx, move |pins| with(pins, &name));
                 },
             ));
         }
@@ -304,6 +326,8 @@ pub(super) fn entries(item: &DockItem, cx: &mut App) -> Vec<MenuEntry> {
 pub(super) enum StartAnother {
     Files,
     Shortcut(Shortcut),
+    /// A pinned file, folder or link, opened again.
+    Pin(Box<Pin>),
     Nothing,
 }
 
@@ -311,6 +335,12 @@ impl StartAnother {
     pub(super) fn of(item: &DockItem) -> Self {
         if item.is_files() {
             return Self::Files;
+        }
+        if let Some(pin) = item.pin.as_ref().filter(|pin| pin.shortcut().is_none()) {
+            return match pin.is_separator() {
+                true => Self::Nothing,
+                false => Self::Pin(Box::new(pin.clone())),
+            };
         }
         match another(item) {
             Some(shortcut) => Self::Shortcut(shortcut),
@@ -322,9 +352,19 @@ impl StartAnother {
         match self {
             Self::Files => Actions::run("files", None, cx),
             Self::Shortcut(shortcut) => shortcut.launch(),
+            Self::Pin(pin) => pin.open(cx),
             Self::Nothing => {}
         }
     }
+}
+
+/// How `pinned` names the application of `item`, a button that is not
+/// pinned, to pin it: its program file, or the path that names its
+/// packaged application. `None` for the file manager, which is Tessera,
+/// and for a window nothing is known of.
+pub(super) fn pin_entry(item: &DockItem) -> Option<String> {
+    let front = item.front().filter(|window| !window.is_own())?;
+    front.program().map(|program| pin_name(&program))
 }
 
 /// Whether `window` is one of the file manager of Tessera.

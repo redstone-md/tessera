@@ -2,3 +2,37 @@
 # ([[widget]] with a name, then [[widget.setting]] entries, each an
 # OptionDecl whose key is the option). Plain labels are English texts of
 # the RUSSIAN table in i18n.rs.
+
+[[widget]]
+name = "windows"
+
+[[widget.setting]]
+key = "sort"
+kind = "choice"
+label = "Order of the buttons"
+description = "Pins first and the rest as they opened, all as they opened, by name, or pins first and the rest as they were dragged."
+default = "pinned"
+choices = [
+    { value = "pinned", label = "Pins first" },
+    { value = "opened", label = "As opened" },
+    { value = "name", label = "By name" },
+    { value = "manual", label = "As dragged" },
+]
+
+[[widget.setting]]
+key = "pinned_on"
+kind = "choice"
+label = "Pins stand on"
+description = "The dock of every display, or only that of the primary display, where the others show only what runs."
+default = "every"
+choices = [
+    { value = "every", label = "Every display" },
+    { value = "primary", label = "Primary display" },
+]
+
+[[widget.setting]]
+key = "audio"
+kind = "toggle"
+label = "Speaker on applications that play"
+description = "A speaker on the button of an application that plays sound: a click mutes it, the wheel turns its volume."
+default = true

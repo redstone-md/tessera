@@ -9,6 +9,7 @@ pub use win32::AppCommand;
 pub use win32::BalloonKind;
 pub use win32::BinUsage;
 pub use win32::BrightnessLevel;
+pub use win32::DefaultDeviceWatch;
 pub use win32::DesktopClose;
 pub use win32::DesktopOptions;
 pub use win32::DisplayMode;
@@ -18,6 +19,7 @@ pub use win32::HookAsks;
 pub use win32::InputName;
 pub use win32::Occupation;
 pub use win32::OwnInput;
+pub use win32::PinVerb;
 pub use win32::PowerChoices;
 #[allow(unused_imports, reason = "for the starts that wait for a program")]
 pub use win32::Process;
@@ -28,6 +30,7 @@ pub use win32::ShellThread;
 pub use win32::ShellWindows;
 pub use win32::ShowDesktop;
 pub use win32::SpellCheck;
+pub use win32::StreamSound;
 pub use win32::SystemZone;
 pub use win32::TileBorder;
 pub use win32::TrayPromotion;
@@ -136,6 +139,7 @@ pub use win32::{Launch, Show};
 )]
 pub use win32::{MouseBinding, MouseButtonName, MouseButtons};
 pub use win32::{NewTemplate, OpenWithHandler, SendToTarget, choose_app};
+pub use win32::{PathDrop, PathDropTarget, PathZone, PathZones, ZoneEffect};
 pub use win32::{Poster, VideoLook, VideoOverlay};
 pub use win32::{PowerMode, PowerModeState};
 pub use win32::{PreviewColors, PreviewHost, PreviewShown};
@@ -153,4 +157,5 @@ pub use win32::{expand_variables, find_program, recent_folder};
     reason = "for the features that ask Explorer while it runs"
 )]
 pub use win32::{explorer_running, shell_mode};
+pub use win32::{scheme_handler, windows_taskbar_pins};
 pub use win32::{terminal, windows_terminal};
