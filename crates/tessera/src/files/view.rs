@@ -3,14 +3,17 @@
 
 //! A window of the file manager: a title bar of its own with the tabs,
 //! the way back and the path of the pane in front below it, the places
-//! and drives at the side, one pane or two side by side, and a status
-//! bar.
+//! and drives at the side, one pane or two side by side, a terminal under
+//! them (F4) that follows the pane in front, and a status bar. A tab
+//! dragged out of the strip goes to a window of its own, or to the strip
+//! of another window it is dropped on.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::{
     AppContext, Context, DragMoveEvent, Entity, EntityId, Hsla, InteractiveElement, IntoElement,
@@ -18,14 +21,16 @@ use gpui::{
     Styled, Subscription, Window, WindowControlArea, div, prelude::FluentBuilder, px, relative,
 };
 use gpui::{AsyncApp, Bounds, Pixels, WeakEntity, canvas};
+use gpui::{Global, Point, Task};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use serde::{Deserialize, Serialize};
 
 use super::details_pane::{DetailsEvent, DetailsPane};
 use super::model::size_text;
 use super::model::{Location, share_root};
 use super::pane::{FolderPane, ICON_HIDDEN, ICON_NEW_FOLDER, PaneEvent, fill_bar};
 use super::preview_pane::PreviewPane;
-use super::session::{OpenTab, Opening, Session};
+use super::session::{OpenTab, Opening, Session, read_state, write_state};
 use super::sidebar::{Sidebar, SidebarEvent};
 use super::tabs::{Tab, Tabs};
 use super::thumbs::{FileViewConfig, Thumbs};
@@ -35,7 +40,9 @@ use crate::menu::{MenuEntry, Menus};
 use crate::platform::FileWork;
 use crate::platform::QuickAccess;
 use crate::platform::{DropEvent, DropTarget, DropZone, DropZones};
+use crate::platform::{NativeSurface, client_origin, pointer_at, pointer_held, root_window_at};
 use crate::popup::PopupAnchor;
+use crate::terminal::{TerminalEvent, TerminalView, Terminals, same_folder};
 use crate::theme::Theme;
 use crate::ui::{icon, logo, one_line};
 
@@ -64,6 +71,29 @@ const ICON_CLOSE: &str = "\u{e8bb}";
 const ICON_PREVIEW: &str = "\u{e8a1}";
 const ICON_CHECK: &str = "\u{e73e}";
 const ICON_DETAILS_PANE: &str = "\u{e946}";
+const ICON_TERMINAL: &str = "\u{e756}";
+
+/// How far out of the strip a tab is dragged to leave the window, in
+/// logical pixels, and how often the pointer is looked at meanwhile: the
+/// drags of GPUI do not leave a window.
+const TEAR_DISTANCE: f32 = 24.;
+const TEAR_POLL: Duration = Duration::from_millis(33);
+
+/// Where a window that a tab left for is put, from the pointer: the tab
+/// stands under it, in logical pixels.
+const TORN_GRAB: (f32, f32) = (110., 20.);
+
+/// The height of the terminal under the panes at first, the least it is
+/// made, and the least it leaves to the panes, in logical pixels.
+const TERMINAL_HEIGHT: f32 = 240.;
+const LEAST_TERMINAL: f32 = 80.;
+const LEAST_PANES: f32 = 120.;
+const TERMINAL_DIVIDER: f32 = 5.;
+
+/// The file the height of the terminal is kept in, and how long after it
+/// was dragged it is written.
+const TERMINAL_FILE: &str = "files-terminal.toml";
+const TERMINAL_KEEP_DELAY: Duration = Duration::from_secs(1);
 
 /// The places of a window that take drops, which its panes, its side and
 /// its tabs write as they draw, with the folder of each in the order they
@@ -137,6 +167,100 @@ struct TabDrag {
 /// The divider between the panes of a split tab, being dragged.
 struct DividerDrag;
 
+/// The divider above the terminal under the panes, being dragged.
+struct TerminalDrag;
+
+/// The terminal under the panes of a window, while it is opened.
+struct TerminalPanel {
+    view: Entity<TerminalView>,
+    /// Whether it shows; a hidden one keeps its shell.
+    open: bool,
+    _heard: Subscription,
+}
+
+/// A tab being dragged, which may leave the window: the pointer is looked
+/// at until the button is let go.
+struct TabTear {
+    index: usize,
+    _poll: Task<()>,
+}
+
+/// What a tab takes to another window: its places, how it is split, and
+/// what is chosen in its pane in front.
+pub(super) struct Carried {
+    tab: OpenTab,
+    chosen: Vec<OsString>,
+}
+
+/// The height of the terminal under the panes, which every window shares
+/// and a file keeps.
+#[derive(Default)]
+struct TerminalHeight {
+    height: Option<f32>,
+    asked: bool,
+    keeping: Option<Task<()>>,
+}
+
+impl Global for TerminalHeight {}
+
+/// What the file of the terminal's height holds.
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct KeptHeight {
+    height: Option<f32>,
+}
+
+impl TerminalHeight {
+    /// The height, as kept; read from its file once, away from the user
+    /// interface.
+    fn get(cx: &mut gpui::App) -> f32 {
+        let this = cx.default_global::<Self>();
+        if !this.asked {
+            this.asked = true;
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                let kept = cx
+                    .background_executor()
+                    .spawn(async {
+                        read_state(TERMINAL_FILE)
+                            .and_then(|text| toml::from_str::<KeptHeight>(&text).ok())
+                            .and_then(|kept| kept.height)
+                    })
+                    .await;
+                cx.update(|cx| {
+                    let this = cx.default_global::<Self>();
+                    // A height dragged meanwhile is newer.
+                    if this.height.is_none() {
+                        this.height = kept;
+                    }
+                    cx.refresh_windows();
+                })
+                .ok();
+            })
+            .detach();
+        }
+        cx.default_global::<Self>()
+            .height
+            .unwrap_or(TERMINAL_HEIGHT)
+    }
+
+    /// Keeps `height`, and writes it a moment later.
+    fn set(height: f32, cx: &mut gpui::App) {
+        let text = toml::to_string(&KeptHeight {
+            height: Some(height),
+        })
+        .unwrap_or_default();
+        let executor = cx.background_executor().clone();
+        let keeping = cx.background_executor().spawn(async move {
+            executor.timer(TERMINAL_KEEP_DELAY).await;
+            write_state(TERMINAL_FILE, &text);
+        });
+        let this = cx.default_global::<Self>();
+        this.height = Some(height);
+        // A write that waits is replaced by this one, which drops it.
+        this.keeping = Some(keeping);
+    }
+}
+
 /// What follows the pointer while a tab is dragged: its title.
 struct TabGhost {
     title: SharedString,
@@ -191,6 +315,16 @@ pub struct FilesView {
     /// the Shell.
     handle: gpui::AnyWindowHandle,
     hwnd: isize,
+    /// The terminal under the panes, once it was opened.
+    terminal: Option<TerminalPanel>,
+    /// The tab being dragged, which may leave the window.
+    tear: Option<TabTear>,
+    /// Where the strip of tabs was drawn, in the window, and the scale of
+    /// the display it was drawn for.
+    strip: Rc<Cell<Option<Bounds<Pixels>>>>,
+    scale: f32,
+    /// How wide the window was drawn, in logical pixels.
+    width: f32,
 }
 
 impl FilesView {
@@ -287,6 +421,11 @@ impl FilesView {
             drag_over: None,
             handle: Window::window_handle(window),
             hwnd,
+            terminal: None,
+            tear: None,
+            strip: Rc::default(),
+            scale: window.scale_factor(),
+            width: window.viewport_size().width / px(1.),
         };
         let this = cx.weak_entity();
         Files::window_opened(view.handle, this.clone(), cx);
@@ -504,6 +643,7 @@ impl FilesView {
         self.pane().read(cx).focus(window);
         self.retitle(window, cx);
         self.tell_navigated(cx);
+        self.follow_pane(cx);
     }
 
     /// Titles the window after the pane in front, and lights its place
@@ -529,6 +669,7 @@ impl FilesView {
                 if pane == self.pane() {
                     self.retitle(window, cx);
                     self.tell_navigated(cx);
+                    self.follow_pane(cx);
                 }
                 let location = pane.read(cx).location().clone();
                 if let Some(root) = location.root().and_then(share_root) {
@@ -721,7 +862,7 @@ impl FilesView {
     }
 
     /// The tabs as they are, to open again.
-    fn opening(&self, cx: &gpui::App) -> Opening {
+    pub(super) fn opening(&self, cx: &gpui::App) -> Opening {
         let tabs = { self.tabs.all().iter() }
             .map(|tab| OpenTab {
                 panes: { tab.panes().iter() }
@@ -806,6 +947,11 @@ impl FilesView {
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // The terminal under the panes takes its own keys, and the text
+        // typed comes to it through the input of the window.
+        if self.terminal_focused(window, cx) {
+            return;
+        }
         // The keys go to a field of the details pane while it has them.
         if self.details.read(cx).typing(window, cx) {
             self.details
@@ -857,6 +1003,352 @@ impl FilesView {
     }
 }
 
+// files-terminal: the terminal under the panes, and tabs that leave for
+// windows of their own or for other windows.
+impl FilesView {
+    /// The native window, as a number.
+    pub(super) fn hwnd(&self) -> isize {
+        self.hwnd
+    }
+
+    /// Whether the keys go to the terminal under the panes.
+    fn terminal_focused(&self, window: &Window, cx: &gpui::App) -> bool {
+        { self.terminal.as_ref() }
+            .is_some_and(|panel| panel.open && panel.view.read(cx).is_focused(window))
+    }
+
+    /// Whether the terminal under the panes shows.
+    fn terminal_open(&self) -> bool {
+        self.terminal.as_ref().is_some_and(|panel| panel.open)
+    }
+
+    /// Shows the terminal under the panes, in the folder of the pane in
+    /// front and with the keys, or hides it; a hidden one keeps its shell.
+    fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let open = match &mut self.terminal {
+            Some(panel) => {
+                panel.open = !panel.open;
+                panel.open
+            }
+            None => {
+                let folder = self.pane().read(cx).folder();
+                let view = cx.new(|cx| TerminalView::new(folder, cx));
+                let heard = cx.subscribe_in(&view, window, Self::terminal_event);
+                self.terminal = Some(TerminalPanel {
+                    view,
+                    open: true,
+                    _heard: heard,
+                });
+                true
+            }
+        };
+        match (open, &self.terminal) {
+            (true, Some(panel)) => {
+                panel.view.read(cx).focus(window);
+                self.follow_pane(cx);
+            }
+            _ => self.pane().read(cx).focus(window),
+        }
+        cx.notify();
+    }
+
+    /// Sends the shell of the terminal under the panes to the folder of the
+    /// pane in front, where it shows one of the file system; places of the
+    /// Shell without a path leave it where it is.
+    fn follow_pane(&mut self, cx: &mut Context<Self>) {
+        let Some(panel) = self.terminal.as_ref().filter(|panel| panel.open) else {
+            return;
+        };
+        if let Some(folder) = self.pane().read(cx).folder() {
+            let view = panel.view.clone();
+            view.update(cx, |terminal, cx| terminal.go_to(folder, cx));
+        }
+    }
+
+    /// The pane in front goes where the shell of the terminal said it went,
+    /// where `[terminal] pane_follows` asks for that.
+    fn terminal_event(
+        &mut self,
+        _: &Entity<TerminalView>,
+        event: &TerminalEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let TerminalEvent::Folder(folder) = event else {
+            return;
+        };
+        if !Terminals::config(cx).pane_follows {
+            return;
+        }
+        let shown = self.pane().read(cx).folder();
+        if shown.is_some_and(|shown| same_folder(&shown, folder)) || !folder.is_dir() {
+            return;
+        }
+        let location = Location::Folder(folder.clone());
+        self.pane()
+            .clone()
+            .update(cx, |pane, cx| pane.go(location, window, cx));
+        // The pane takes the keys as it goes; they stay with the terminal.
+        if let Some(panel) = &self.terminal {
+            panel.view.read(cx).focus(window);
+        }
+    }
+
+    /// Begins to watch the pointer while the tab `index` is dragged, as
+    /// the drags of GPUI end at the edge of the window.
+    fn begin_tear(&mut self, index: usize, cx: &mut Context<Self>) {
+        let poll = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            loop {
+                cx.background_executor().timer(TEAR_POLL).await;
+                if pointer_held() {
+                    continue;
+                }
+                let at = pointer_at();
+                cx.update(|cx| Self::tear_ended(this, at, cx)).ok();
+                break;
+            }
+        });
+        self.tear = Some(TabTear { index, _poll: poll });
+    }
+
+    /// The tab being dragged was let go at `at`, on the screen. Near the
+    /// title bar, GPUI moved it within the strip. On the title bar of another
+    /// window of the file manager it moves there; elsewhere it opens in a
+    /// window of its own at the pointer. A window whose last tab leaves
+    /// closes.
+    fn tear_ended(this: WeakEntity<Self>, at: Option<(i32, i32)>, cx: &mut gpui::App) {
+        let Some(view) = this.upgrade() else {
+            return;
+        };
+        let torn = view.update(cx, |view, _| view.tear.take().map(|tear| tear.index));
+        let (Some(index), Some(at)) = (torn, at) else {
+            return;
+        };
+        if index >= view.read(cx).tabs.len() || view.read(cx).near_strip(at) {
+            return;
+        }
+        let source = view.read(cx).hwnd;
+        let carried = view.read(cx).carried(index, cx);
+        let target = { root_window_at(at) }
+            .filter(|hwnd| *hwnd != source)
+            .and_then(|hwnd| {
+                Files::windows(cx)
+                    .into_iter()
+                    .find(|each| each.hwnd == hwnd)
+            })
+            .and_then(|window| window.handle.downcast::<FilesView>());
+        if let Some(target) = target {
+            let given_back = target.update(cx, |target, window, cx| {
+                target.take_tab(carried, at, window, cx)
+            });
+            // Dropped beside its strip, or on a window that closed: the
+            // tab stays.
+            if !matches!(given_back, Ok(None)) {
+                return;
+            }
+        } else {
+            if view.read(cx).tabs.len() < 2 {
+                return;
+            }
+            let opening = Opening {
+                tabs: vec![carried.tab],
+                active: 0,
+            };
+            let Some(opened) = Files::open_with(opening, cx) else {
+                return;
+            };
+            let chosen = carried.chosen;
+            let placed = opened.update(cx, |opened, window, cx| {
+                opened.select_when_loaded(chosen, cx);
+                place_under_pointer(at, window)
+            });
+            if let Ok(Err(error)) = placed {
+                report!("the window of the tab is not where it was dropped: {error:#}");
+            }
+        }
+        let handle = view.read(cx).handle;
+        let parted = handle.update(cx, |_, window, cx| {
+            view.update(cx, |view, cx| view.part_with(index, window, cx));
+        });
+        parted.ok();
+    }
+
+    /// Whether `at`, on the screen, is within [`TEAR_DISTANCE`] of the
+    /// title bar, which holds the strip of tabs.
+    fn near_strip(&self, at: (i32, i32)) -> bool {
+        let Some(origin) = client_origin(self.hwnd) else {
+            return true;
+        };
+        let point = self.window_point(at, origin);
+        let margin = TEAR_DISTANCE;
+        let (x, y) = (point.x / px(1.), point.y / px(1.));
+        (-margin..=self.width + margin).contains(&x)
+            && (-margin..=TITLE_HEIGHT + margin).contains(&y)
+    }
+
+    /// Whether the point `point` of the window is on its title bar, where
+    /// the tabs are.
+    fn on_title(&self, point: Point<Pixels>) -> bool {
+        let (x, y) = (point.x / px(1.), point.y / px(1.));
+        (0. ..=self.width).contains(&x) && (0. ..=TITLE_HEIGHT).contains(&y)
+    }
+
+    /// The point of the window at `at` on the screen, whose drawing area
+    /// begins at `origin`.
+    fn window_point(&self, at: (i32, i32), origin: (i32, i32)) -> Point<Pixels> {
+        let scale = self.scale.max(0.1);
+        gpui::point(
+            px((at.0 - origin.0) as f32 / scale),
+            px((at.1 - origin.1) as f32 / scale),
+        )
+    }
+
+    /// What the tab `index` takes along to another window.
+    fn carried(&self, index: usize, cx: &gpui::App) -> Carried {
+        let tab = &self.tabs.all()[index];
+        let chosen = { tab.active().read(cx).chosen().into_iter() }
+            .filter_map(|path| path.file_name().map(OsString::from))
+            .collect();
+        Carried {
+            tab: OpenTab {
+                panes: { tab.panes().iter() }
+                    .map(|pane| pane.read(cx).location().clone())
+                    .collect(),
+                active: tab.active_index(),
+                split: tab.split(),
+            },
+            chosen,
+        }
+    }
+
+    /// Takes the tab `carried` from another window where `at`, on the
+    /// screen, is on the title bar that holds the tabs, at the place it
+    /// was dropped, and puts the window in front; gives it back where `at`
+    /// is not.
+    fn take_tab(
+        &mut self,
+        carried: Carried,
+        at: (i32, i32),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Carried> {
+        let Some(origin) = client_origin(self.hwnd) else {
+            return Some(carried);
+        };
+        let point = self.window_point(at, origin);
+        if !self.on_title(point) {
+            return Some(carried);
+        }
+        // The tabs share the width of the strip; one dropped past them
+        // goes last.
+        let place = match self.strip.get() {
+            Some(strip) if strip.size.width > px(0.) => {
+                let wide = strip.size.width / self.tabs.len() as f32;
+                ((point.x - strip.origin.x) / wide).round().max(0.) as usize
+            }
+            _ => self.tabs.len(),
+        };
+        let tab = Self::tab_of(
+            &carried.tab,
+            self.config,
+            &self.zones,
+            &self.thumbs,
+            &mut self.listening,
+            window,
+            cx,
+        );
+        self.tabs.insert(place, tab);
+        self.show(window, cx);
+        self.select_when_loaded(carried.chosen, cx);
+        window.activate_window();
+        None
+    }
+
+    /// Lets go of the tab `index`, which went to another window; the window
+    /// closes with its last tab.
+    fn part_with(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.close(index) else {
+            self.close_window(window, cx);
+            return;
+        };
+        for pane in tab.panes() {
+            self.listening.remove(&pane.entity_id());
+        }
+        self.show(window, cx);
+    }
+
+    /// The entry of the View menu that shows and hides the terminal.
+    fn terminal_entry(&self, this: &Entity<Self>, cx: &gpui::App) -> MenuEntry {
+        let (this, handle) = (this.downgrade(), self.handle);
+        let mark = if self.terminal_open() { ICON_CHECK } else { "" };
+        MenuEntry::new(mark, Language::of(cx).say("Terminal"), move |cx| {
+            let this = this.clone();
+            let toggled = handle.update(cx, |_, window, cx| {
+                this.update(cx, |this, cx| this.toggle_terminal(window, cx))
+            });
+            toggled.ok();
+        })
+    }
+
+    /// The terminal under the panes, with the divider above it that sets
+    /// its height, while it shows.
+    fn render_terminal(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let panel = self.terminal.as_ref().filter(|panel| panel.open)?;
+        let height = TerminalHeight::get(cx);
+        let divider = div()
+            .id("files-terminal-divider")
+            .h(px(TERMINAL_DIVIDER))
+            .w_full()
+            .flex_none()
+            .cursor_row_resize()
+            .hover(|style| style.bg(theme.colors.primary.opacity(0.3)))
+            .on_drag(TerminalDrag, |_, _, _, cx| cx.new(|_| NoGhost));
+        let terminal = div()
+            .h(px(height))
+            .w_full()
+            .flex_none()
+            .rounded(theme.shape.large)
+            .overflow_hidden()
+            .child(panel.view.clone());
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .child(divider)
+                .child(terminal)
+                .into_any_element(),
+        )
+    }
+}
+
+/// An element over the strip of tabs that writes down where it is drawn,
+/// for tabs dropped on it from other windows.
+fn strip_marker(strip: Rc<Cell<Option<Bounds<Pixels>>>>) -> impl IntoElement {
+    canvas(
+        move |bounds, _, _| strip.set(Some(bounds)),
+        |_, (), _, _| {},
+    )
+    .absolute()
+    .size_full()
+}
+
+/// Puts the window so that its first tab is under the pointer at `at`, on
+/// the screen.
+fn place_under_pointer(at: (i32, i32), window: &Window) -> anyhow::Result<()> {
+    let native = NativeSurface::of(window)?;
+    let frame = native.frame()?;
+    let scale = window.scale_factor();
+    let left = at.0 - (TORN_GRAB.0 * scale) as i32;
+    let top = at.1 - (TORN_GRAB.1 * scale) as i32;
+    native.place(crate::platform::ScreenRect {
+        left,
+        top,
+        right: left + frame.right - frame.left,
+        bottom: top + frame.bottom - frame.top,
+    })
+}
+
 /// A square button of the window with `glyph`, dimmed unless `enabled`.
 pub fn tool_button(
     theme: &Theme,
@@ -901,6 +1393,7 @@ impl FilesView {
             index,
             title: title.clone(),
         };
+        let this = cx.weak_entity();
         let close = div()
             .id(("files-tab-close", index))
             .size(px(20.))
@@ -963,7 +1456,10 @@ impl FilesView {
                 MouseButton::Middle,
                 cx.listener(move |this, _, window, cx| this.close_tab(index, window, cx)),
             )
-            .on_drag(drag, |drag: &TabDrag, _, _, cx| {
+            .on_drag(drag, move |drag: &TabDrag, _, _, cx| {
+                // The pointer is watched beyond the window meanwhile.
+                this.update(cx, |this, cx| this.begin_tear(drag.index, cx))
+                    .ok();
                 let title = drag.title.clone();
                 cx.new(|_| TabGhost { title })
             })
@@ -1021,10 +1517,13 @@ impl FilesView {
                 div()
                     .flex_shrink()
                     .min_w_0()
+                    .h_full()
+                    .relative()
                     .flex()
                     .items_end()
                     .gap(px(2.))
                     .overflow_hidden()
+                    .child(strip_marker(self.strip.clone()))
                     .children(tabs),
             )
             .child(
@@ -1093,6 +1592,7 @@ impl FilesView {
         let split = self.tabs.active().is_split();
         let previewing = self.preview.read(cx).is_open();
         let detailing = self.details.read(cx).is_open();
+        let terminal = self.terminal_open();
         let navigation = div()
             .flex()
             .items_center()
@@ -1145,6 +1645,7 @@ impl FilesView {
                     let mut entries = view_pane.update(cx, |pane, cx| pane.view_menu(cx));
                     if let Some(this) = this.upgrade() {
                         entries.extend(this.read(cx).panes_menu(&this, cx));
+                        entries.push(this.read(cx).terminal_entry(&this, cx));
                     }
                     Menus::open(entries, anchor, cx);
                 },
@@ -1168,6 +1669,11 @@ impl FilesView {
                 tool_button(theme, "files-details", ICON_DETAILS_PANE, true)
                     .when(detailing, |button| button.text_color(theme.colors.primary))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_details(cx))),
+            )
+            .child(
+                tool_button(theme, "files-terminal", ICON_TERMINAL, true)
+                    .when(terminal, |button| button.text_color(theme.colors.primary))
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx))),
             );
         div()
             .h(px(TOOLBAR_HEIGHT))
@@ -1198,9 +1704,9 @@ impl FilesView {
             .id("files-body")
             .flex_1()
             .min_w_0()
-            .h_full()
-            .flex()
-            .mr(theme.spacing.small);
+            .min_h_0()
+            .w_full()
+            .flex();
         match tab.panes() {
             [first, second] => {
                 let divider = div()
@@ -1286,9 +1792,44 @@ impl Render for FilesView {
             .update(cx, |preview, cx| preview.show(entry.as_ref(), window, cx));
         self.details
             .update(cx, |details, cx| details.show(entry, chosen, cx));
+        self.scale = window.scale_factor();
+        self.width = window.viewport_size().width / px(1.);
+        // The panes and, under them, the terminal, whose divider sets its
+        // height.
+        let main = div()
+            .id("files-main")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .mr(theme.spacing.small)
+            .on_drag_move(
+                cx.listener(|_, event: &DragMoveEvent<TerminalDrag>, _, cx| {
+                    let bounds = event.bounds;
+                    let room = bounds.size.height / px(1.);
+                    let height =
+                        (bounds.bottom() - event.event.position.y) / px(1.) - TERMINAL_DIVIDER;
+                    let most = (room - LEAST_PANES).max(LEAST_TERMINAL);
+                    TerminalHeight::set(height.clamp(LEAST_TERMINAL, most), cx);
+                    cx.notify();
+                }),
+            )
+            .child(self.render_body(&theme, cx))
+            .children(self.render_terminal(&theme, cx));
         div()
             .id("files")
             .on_key_down(cx.listener(|this, event, window, cx| this.key_down(event, window, cx)))
+            // F4 shows and hides the terminal wherever the keys are,
+            // before the terminal takes them.
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let held = &event.keystroke.modifiers;
+                let plain = !(held.control || held.alt || held.shift || held.platform);
+                if event.keystroke.key == "f4" && plain {
+                    this.toggle_terminal(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
             .size_full()
             .flex()
             .flex_col()
@@ -1303,7 +1844,7 @@ impl Render for FilesView {
                     .min_h_0()
                     .flex()
                     .child(self.sidebar.clone())
-                    .child(self.render_body(&theme, cx))
+                    .child(main)
                     .child(self.preview.clone())
                     .child(self.details.clone()),
             )
