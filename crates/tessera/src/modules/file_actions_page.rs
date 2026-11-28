@@ -25,6 +25,7 @@ use crate::field::TextField;
 use crate::file_actions::{self, Chosen, FileAction, MatchKind};
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
+use crate::runners::fill;
 use crate::shell::Shell;
 use crate::theme::Theme;
 use crate::ui::{icon, list_title, one_line, state_layer};
@@ -576,7 +577,10 @@ impl FileActionsPage {
             said.push(what);
         }
         if !draft.submenu.trim().is_empty() {
-            said.push(format!("{} {}", language.say("in"), draft.submenu.trim()));
+            said.push(fill(
+                language.say("in the submenu {}"),
+                &[draft.submenu.trim()],
+            ));
         }
         (title, said.join(" \u{b7} "))
     }
