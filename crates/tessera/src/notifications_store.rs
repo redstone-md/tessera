@@ -13,10 +13,24 @@
 //! badges of the dock all take what they show from here, so the
 //! notification center is read once for all of them. The `[[notification_rule]]`
 //! entries of the configuration decide what is kept of which application.
+//!
+//! For each notification of Windows the toast its application wrote is
+//! read from Windows' notification database, on a thread of its own, a
+//! moment after the list changed ([`crate::toast`]): with it come the
+//! pictures, the progress bars, the buttons, the input fields and what a
+//! click starts, which this part does ([`NotificationStore::activate`]).
+//! Where the database cannot be read, the texts of the list are all
+//! there is, and a click opens the application. The jobs on files that
+//! publish their progress (`platform::FileJobs`) are kept here too, under
+//! `[notifications] jobs = true`.
+
+mod jobs;
+mod pictures;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use gpui::{App, AsyncApp, Global, Task};
@@ -25,10 +39,26 @@ use serde::{Deserialize, Serialize};
 use crate::badges::Badges;
 use crate::banners::{Banners, NotificationsConfig};
 use crate::icons::{Icon, icon_of_pixels, image_of_bytes};
-use crate::platform::{IconPixels, Notification, Notifications, Occupation, ShellThread};
+use crate::platform::{
+    Activated, AppNotificationSettings, IconPixels, Notification, NotificationDatabase,
+    Notifications, Occupation, QuietProfile, ShellThread, ToastActivation, ToastRoute,
+    WindowsQuiet,
+};
+use crate::toast::{Activation, Toast, input_values};
+
+pub use jobs::Job;
+pub use pictures::sound_file;
 
 /// How often the notification center is read.
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+/// How long after a change of the list the toasts are read from the
+/// database, so that a burst of changes is read once.
+const PAYLOAD_DELAY: Duration = Duration::from_millis(300);
+
+/// How many readings of the list pass before the settings of the
+/// applications in Windows are read again.
+const SETTINGS_EVERY: u32 = 15;
 
 /// How long after a change the history is written, so that a burst of
 /// changes is written once.
@@ -148,6 +178,17 @@ pub struct Entry {
     /// Whether the notification center still holds it.
     #[serde(skip)]
     pub present: bool,
+    /// The toast its application wrote, once it was read from the
+    /// database; it is not kept in the history file.
+    #[serde(skip)]
+    pub toast: Option<Arc<Toast>>,
+    /// Until when it was snoozed, in seconds since 1970: it is not listed
+    /// until then, and then comes again.
+    #[serde(skip)]
+    pub snoozed_until: Option<i64>,
+    /// For a job on files that ended: the folder its items went to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<PathBuf>,
 }
 
 impl Entry {
@@ -161,7 +202,15 @@ impl Entry {
             body: notification.body,
             posted: notification.posted,
             present: true,
+            toast: None,
+            snoozed_until: None,
+            destination: None,
         }
+    }
+
+    /// Whether it is listed now: not while it is snoozed.
+    pub fn listed(&self, now: i64) -> bool {
+        self.snoozed_until.is_none_or(|until| until <= now)
     }
 
     /// Whether it says what `notification` says.
@@ -252,8 +301,12 @@ fn merge(
             .find(|entry| entry.id == id && (entry.present || entry.posted == notification.posted));
         if let Some(entry) = known {
             if !entry.present || !entry.says(&notification) {
-                let key = entry.key;
-                *entry = Entry::of(notification, key);
+                // The toast stays until it is read again.
+                let (key, toast) = (entry.key, entry.toast.take());
+                *entry = Entry {
+                    toast,
+                    ..Entry::of(notification, key)
+                };
                 changed = true;
             }
             continue;
@@ -289,6 +342,18 @@ fn trim(entries: &mut Vec<Entry>, keep: usize) -> bool {
         gone <= keep
     });
     entries.len() != before
+}
+
+/// What on a notification was pressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Press {
+    /// The notification itself.
+    Body,
+    /// The header it is grouped under.
+    Header,
+    /// The action of its toast at this place, a button or an entry of its
+    /// menu.
+    Action(usize),
 }
 
 /// What the history file holds.
@@ -376,9 +441,29 @@ pub struct NotificationStore {
     occupation: Option<Occupation>,
     /// The logos of the applications, by the identifier they post under.
     logos: HashMap<String, Icon>,
+    /// The pictures of the toasts, by the application and the name the
+    /// toast gives them.
+    pictures: HashMap<(String, String), Icon>,
+    /// Why the toasts cannot be read from the database, while they cannot.
+    payload_error: Option<String>,
+    /// What Windows' own do not disturb lets through, while it is
+    /// followed.
+    windows_quiet: Option<QuietProfile>,
+    /// What the settings of Windows say of each application, while they
+    /// are followed, by the identifier it posts under.
+    app_settings: HashMap<String, AppNotificationSettings>,
+    /// The jobs on files that run, oldest first.
+    jobs: Vec<Job>,
 }
 
 impl Global for NotificationStore {}
+
+/// The name the self test of Windows knows the store by.
+#[allow(
+    dead_code,
+    reason = "read by the report of windows-selftest after merge"
+)]
+pub type NotificationsStore = NotificationStore;
 
 /// What reads the notification center for the store, kept apart from it
 /// so that its own changes tell no one.
@@ -398,8 +483,25 @@ struct Watch {
     occupation: Option<bool>,
     /// The applications whose logos were looked for.
     logos: HashSet<String>,
+    /// The pictures that were looked for.
+    pictures: HashSet<(String, String)>,
+    /// The notifications whose toast was looked for in the database, with
+    /// the texts they had then; one whose texts change is read again.
+    tried: HashMap<u32, (String, String)>,
+    /// The new notifications whose banners wait for their toasts.
+    waiting_banners: Vec<u64>,
+    /// Whether Windows' do not disturb and the settings of the
+    /// applications are followed.
+    follow_windows: bool,
+    /// Whether pictures of the web are fetched.
+    web_images: bool,
+    /// How many readings of the list there were.
+    readings: u32,
     reading: Option<Task<()>>,
     saving: Option<Task<()>>,
+    payloads: Option<Task<()>>,
+    following: Option<Task<()>>,
+    jobs: Option<Task<()>>,
 }
 
 impl Global for Watch {}
@@ -429,34 +531,145 @@ impl NotificationStore {
         }
         let watch = cx.default_global::<Watch>();
         watch.occupation = config.occupations();
-        if watch.reading.is_none() {
+        watch.web_images = config.web_images();
+        let follow = config.follow_windows();
+        if watch.follow_windows != follow {
+            watch.follow_windows = follow;
+            watch.readings = 0;
+            let following = follow.then(|| cx.spawn(Self::follow_windows));
+            cx.global_mut::<Watch>().following = following;
+            if !follow {
+                let this = cx.global_mut::<Self>();
+                this.windows_quiet = None;
+                this.app_settings.clear();
+            }
+        }
+        if cx.global::<Watch>().reading.is_none() {
             let reading = cx.spawn(Self::read);
             cx.global_mut::<Watch>().reading = Some(reading);
         }
+        jobs::configure(config.jobs(), cx);
         Badges::count(cx);
     }
 
-    /// Reads the history, then the notification center every two seconds,
-    /// for as long as Tessera runs.
+    /// Follows Windows' own do not disturb for as long as it is asked to.
+    async fn follow_windows(cx: &mut AsyncApp) {
+        let read = cx
+            .background_executor()
+            .spawn(async { WindowsQuiet::now().and_then(|now| Ok((now, WindowsQuiet::follow()?))) })
+            .await;
+        let changes = match read {
+            Ok((now, changes)) => {
+                let set = cx.update(|cx| Self::take_windows_quiet(Some(now), cx));
+                if set.is_err() {
+                    return;
+                }
+                changes
+            }
+            Err(error) => {
+                report!("{error}; Tessera's do not disturb does not follow Windows'");
+                return;
+            }
+        };
+        while let Ok(profile) = changes.recv().await {
+            if cx
+                .update(|cx| Self::take_windows_quiet(Some(profile), cx))
+                .is_err()
+            {
+                break;
+            }
+        }
+    }
+
+    fn take_windows_quiet(profile: Option<QuietProfile>, cx: &mut App) {
+        if cx.global::<Self>().windows_quiet != profile {
+            cx.global_mut::<Self>().windows_quiet = profile;
+        }
+    }
+
+    /// Reads the history, then the notification center every two seconds
+    /// and each time Windows tells of a change, for as long as Tessera
+    /// runs.
     async fn read(cx: &mut AsyncApp) {
         let saved = cx.background_executor().spawn(async { load() }).await;
         if cx.update(|cx| Self::restore(saved, cx)).is_err() {
             return;
         }
+        // The ticks of the clock and the changes Windows tells of wake the
+        // reading alike; one waiting wake is enough.
+        let (wake, woken) = async_channel::bounded::<()>(1);
+        let ticks = wake.clone();
+        cx.background_executor()
+            .spawn(async move {
+                let changes = Notifications::watch();
+                if let Ok(changes) = changes {
+                    while changes.recv().await.is_ok() {
+                        if wake.try_send(()).is_err() && wake.is_closed() {
+                            break;
+                        }
+                    }
+                }
+            })
+            .detach();
+        let clock = cx.background_executor().clone();
+        cx.background_executor()
+            .spawn(async move {
+                loop {
+                    clock.timer(REFRESH_INTERVAL).await;
+                    if ticks.try_send(()).is_err() && ticks.is_closed() {
+                        break;
+                    }
+                }
+            })
+            .detach();
         loop {
-            let Ok(asked) = cx.update(|cx| cx.global::<Watch>().occupation) else {
+            let Ok((asked, settings_of)) = cx.update(Self::what_to_ask) else {
                 break;
             };
             let read = cx.background_executor().spawn(async move {
                 let occupation = asked.and_then(Occupation::now);
-                (Notifications::list(), occupation)
+                let settings: Option<HashMap<String, AppNotificationSettings>> =
+                    settings_of.map(|ids| {
+                        { ids.into_iter() }
+                            .map(|id| {
+                                let settings = AppNotificationSettings::of(&id);
+                                (id, settings)
+                            })
+                            .collect()
+                    });
+                (Notifications::list(), occupation, settings)
             });
-            let (listed, occupation) = read.await;
-            if cx.update(|cx| Self::take(listed, occupation, cx)).is_err() {
+            let (listed, occupation, settings) = read.await;
+            if cx
+                .update(|cx| Self::take(listed, occupation, settings, cx))
+                .is_err()
+            {
                 break;
             }
-            cx.background_executor().timer(REFRESH_INTERVAL).await;
+            if woken.recv().await.is_err() {
+                break;
+            }
         }
+    }
+
+    /// What the next reading asks besides the list: whether the user is
+    /// busy (and whether duplicating counts), and the applications whose
+    /// settings in Windows are read again, now and then while they are
+    /// followed.
+    fn what_to_ask(cx: &mut App) -> (Option<bool>, Option<Vec<String>>) {
+        let ids: Vec<String> = {
+            let mut ids: Vec<String> = { cx.global::<Self>().entries.iter() }
+                .map(|entry| entry.app_id.clone())
+                .filter(|id| !id.is_empty())
+                .collect();
+            ids.sort();
+            ids.dedup();
+            ids
+        };
+        let watch = cx.global_mut::<Watch>();
+        let again = watch.follow_windows && watch.readings.is_multiple_of(SETTINGS_EVERY);
+        watch.readings = watch.readings.wrapping_add(1);
+        (watch.occupation, again.then_some(ids))
     }
 
     /// Takes in the history that was read.
@@ -486,11 +699,17 @@ impl NotificationStore {
     fn take(
         listed: Result<Vec<Notification>, String>,
         occupation: Option<Occupation>,
+        settings: Option<HashMap<String, AppNotificationSettings>>,
         cx: &mut App,
     ) {
         if cx.global::<Self>().occupation != occupation {
             cx.global_mut::<Self>().occupation = occupation;
             Banners::occupation_changed(occupation, cx);
+        }
+        if let Some(settings) = settings
+            && cx.global::<Self>().app_settings != settings
+        {
+            cx.global_mut::<Self>().app_settings = settings;
         }
         let listed = match listed {
             Ok(listed) => listed,
@@ -507,6 +726,8 @@ impl NotificationStore {
         }
         let watch = cx.global_mut::<Watch>();
         if watch.last.as_ref() == Some(&listed) {
+            // A progress bar may have moved without a text changing.
+            Self::read_payloads_later(Vec::new(), cx);
             return;
         }
         let first = !watch.news;
@@ -517,9 +738,13 @@ impl NotificationStore {
         let rules = store.rules.clone();
         let mut entries = store.entries.clone();
         let mut next_key = store.next_key;
+        let silenced: HashSet<String> = { store.app_settings.iter() }
+            .filter(|(_, settings)| !settings.enabled)
+            .map(|(id, _)| id.clone())
+            .collect();
         let hidden = |notification: &Notification| {
             let rule = rule_for(&rules, &notification.app, &notification.app_id);
-            rule.is_some_and(|rule| !rule.show)
+            rule.is_some_and(|rule| !rule.show) || silenced.contains(&notification.app_id)
         };
         let (arrived, changed) = merge(
             &mut entries,
@@ -540,8 +765,128 @@ impl NotificationStore {
             Badges::count(cx);
         }
         Self::look_for_logos(cx);
-        if !arrived.is_empty() {
-            Banners::arrive(&arrived, cx);
+        Self::read_payloads_later(arrived, cx);
+    }
+
+    /// The notifications whose toasts are to be read: those held whose
+    /// texts changed since their toast was looked for, or that were never
+    /// looked for, and those with a progress bar, which may move without
+    /// a text changing.
+    fn payloads_wanted(cx: &App) -> Vec<u32> {
+        let tried = &cx.global::<Watch>().tried;
+        { cx.global::<Self>().entries.iter() }
+            .filter(|entry| entry.present)
+            .filter_map(|entry| {
+                let id = entry.id?;
+                let texts = (entry.title.clone(), entry.body.clone());
+                let moving =
+                    { entry.toast.as_ref() }.is_some_and(|toast| !toast.progress.is_empty());
+                (moving || tried.get(&id) != Some(&texts)).then_some(id)
+            })
+            .collect()
+    }
+
+    /// Reads the toasts of the notifications that want it a moment from
+    /// now, unless that is under way; the banners of `arrived` come once
+    /// their toasts were read, or could not be.
+    fn read_payloads_later(arrived: Vec<u64>, cx: &mut App) {
+        cx.global_mut::<Watch>().waiting_banners.extend(arrived);
+        if cx.global::<Watch>().payloads.is_some() {
+            return;
+        }
+        if Self::payloads_wanted(cx).is_empty() {
+            Self::release_banners(cx);
+            return;
+        }
+        let reading = cx.spawn(async move |cx: &mut AsyncApp| {
+            cx.background_executor().timer(PAYLOAD_DELAY).await;
+            let Ok(wanted) = cx.update(|cx| Self::payloads_wanted(cx)) else {
+                return;
+            };
+            let answer = NotificationDatabase::read(wanted.clone()).recv().await;
+            let answer =
+                answer.unwrap_or_else(|_| Err("the notification database was not read".to_owned()));
+            let parsed = cx
+                .background_executor()
+                .spawn(async move {
+                    answer.map(|payloads| {
+                        { payloads.into_iter() }
+                            .map(|payload| (payload.id, Toast::parse(&payload.xml, &payload.data)))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .await;
+            cx.update(|cx| {
+                cx.global_mut::<Watch>().payloads = None;
+                Self::take_payloads(wanted, parsed, cx);
+                Self::release_banners(cx);
+            })
+            .ok();
+        });
+        cx.global_mut::<Watch>().payloads = Some(reading);
+    }
+
+    /// Shows the banners that waited for their toasts.
+    fn release_banners(cx: &mut App) {
+        let waiting = std::mem::take(&mut cx.global_mut::<Watch>().waiting_banners);
+        if !waiting.is_empty() {
+            Banners::arrive(&waiting, cx);
+        }
+    }
+
+    /// Takes in the toasts read for the notifications `wanted`.
+    fn take_payloads(
+        wanted: Vec<u32>,
+        parsed: Result<Vec<(u32, Option<Toast>)>, String>,
+        cx: &mut App,
+    ) {
+        let texts: HashMap<u32, (String, String)> = { cx.global::<Self>().entries.iter() }
+            .filter(|entry| entry.present)
+            .filter_map(|entry| Some((entry.id?, (entry.title.clone(), entry.body.clone()))))
+            .collect();
+        let watch = cx.global_mut::<Watch>();
+        for id in &wanted {
+            if let Some(texts) = texts.get(id) {
+                watch.tried.insert(*id, texts.clone());
+            }
+        }
+        watch.tried.retain(|id, _| texts.contains_key(id));
+        let parsed = match parsed {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                if cx.global::<Self>().payload_error.as_ref() != Some(&error) {
+                    report!("{error}; notifications show their texts only");
+                    cx.global_mut::<Self>().payload_error = Some(error);
+                }
+                return;
+            }
+        };
+        if cx.global::<Self>().payload_error.is_some() {
+            cx.global_mut::<Self>().payload_error = None;
+        }
+        let mut found = Vec::new();
+        {
+            let this = cx.global_mut::<Self>();
+            for (id, toast) in parsed {
+                let Some(toast) = toast else {
+                    continue;
+                };
+                let held =
+                    { this.entries.iter_mut() }.find(|entry| entry.present && entry.id == Some(id));
+                let Some(entry) = held else {
+                    continue;
+                };
+                if entry.toast.as_deref() == Some(&toast) {
+                    continue;
+                }
+                NotificationDatabase::saw(&entry.title);
+                let toast = Arc::new(toast);
+                found.push((entry.app_id.clone(), toast.clone()));
+                entry.toast = Some(toast);
+            }
+        }
+        for (app_id, toast) in found {
+            pictures::look_for(&app_id, &toast, cx);
         }
     }
 
@@ -718,6 +1063,9 @@ impl NotificationStore {
                 body,
                 posted: unix_now(),
                 present: false,
+                toast: None,
+                snoozed_until: None,
+                destination: None,
             },
         );
         let keep = this.keep;
@@ -726,21 +1074,171 @@ impl NotificationStore {
         key
     }
 
-    /// Opens the application of the notification `key` and takes the
-    /// notification away, as a click on it in the notification center of
-    /// Windows does. What a button of the notification would have done
-    /// cannot be done: Windows does not tell.
-    pub fn open(key: u64, cx: &mut App) {
-        let Some(entry) = cx.default_global::<Self>().entry(key) else {
+    /// Does what `press` on the notification `key` asks, with `typed` the
+    /// values the user gave its input fields, by their identifiers. A
+    /// snooze shows it again after the minutes chosen; anything else takes
+    /// it away afterwards, as Windows does.
+    pub fn activate(key: u64, press: Press, typed: &HashMap<String, String>, cx: &mut App) {
+        let Some(entry) = cx.default_global::<Self>().entry(key).cloned() else {
             return;
         };
-        if !entry.app_id.is_empty() {
-            crate::platform::Launch::app(&entry.app_id)
-                .named(entry.app.clone())
-                .quiet()
+        let toast = entry.toast.clone();
+        let asked = match (&toast, press) {
+            (Some(toast), Press::Body) => {
+                Some((toast.launch.clone().unwrap_or_default(), toast.activation))
+            }
+            (Some(toast), Press::Header) => toast
+                .header
+                .as_ref()
+                .map(|header| (header.arguments.clone(), header.activation)),
+            (Some(toast), Press::Action(index)) => {
+                let Some(action) = toast.actions.get(index) else {
+                    return;
+                };
+                if action.is_snooze() {
+                    let chosen = { action.input_id.as_ref() }.and_then(|id| {
+                        typed.get(id).cloned().or_else(|| {
+                            input_values(toast, typed)
+                                .into_iter()
+                                .find(|(input, _)| input == id)
+                                .map(|(_, value)| value)
+                        })
+                    });
+                    let minutes = toast.snooze_minutes(chosen.as_deref());
+                    Self::snooze(key, minutes, cx);
+                    return;
+                }
+                if action.is_dismiss() {
+                    Self::dismiss(&[key], cx);
+                    return;
+                }
+                Some((action.arguments.clone(), action.activation))
+            }
+            (None, _) => None,
+        };
+        let route = |activation: Activation| match activation {
+            Activation::Background => ToastRoute::Background,
+            Activation::Protocol => ToastRoute::Protocol,
+            Activation::Foreground | Activation::System => ToastRoute::Foreground,
+        };
+        match asked {
+            Some((arguments, activation))
+                if !entry.app_id.is_empty() || activation == Activation::Protocol =>
+            {
+                let inputs = { toast.as_deref() }
+                    .map(|toast| input_values(toast, typed))
+                    .unwrap_or_default();
+                let started = ToastActivation {
+                    app_id: entry.app_id.clone(),
+                    arguments,
+                    route: route(activation),
+                    inputs,
+                }
                 .start();
+                let (app_id, app) = (entry.app_id.clone(), entry.app.clone());
+                cx.spawn(async move |_: &mut AsyncApp| match started.recv().await {
+                    Ok(Ok(
+                        Activated::AsToast
+                        | Activated::AsLaunch
+                        | Activated::Address
+                        | Activated::Opened,
+                    )) => {}
+                    Ok(Err(error)) => {
+                        report!("{error}");
+                        // The application is opened at least, as before.
+                        if press == Press::Body && !app_id.is_empty() {
+                            crate::platform::Launch::app(&app_id)
+                                .named(app)
+                                .quiet()
+                                .start();
+                        }
+                    }
+                    Err(_) => {}
+                })
+                .detach();
+            }
+            _ if press == Press::Body && !entry.app_id.is_empty() => {
+                crate::platform::Launch::app(&entry.app_id)
+                    .named(entry.app.clone())
+                    .quiet()
+                    .start();
+            }
+            _ => {}
         }
         Self::dismiss(&[key], cx);
+    }
+
+    /// Takes the notification `key` out of the notification center of
+    /// Windows and out of the list for `minutes`, and then shows it again
+    /// as a banner, as Windows' snooze does.
+    pub fn snooze(key: u64, minutes: u32, cx: &mut App) {
+        let until = unix_now() + i64::from(minutes) * 60;
+        let this = cx.default_global::<Self>();
+        let Some(entry) = this.entries.iter_mut().find(|entry| entry.key == key) else {
+            return;
+        };
+        entry.snoozed_until = Some(until);
+        let id = entry.id.filter(|_| entry.present);
+        Banners::withdraw(key, cx);
+        if let Some(id) = id {
+            Self::forget_in_windows(vec![id], cx);
+        }
+        let back = cx.spawn(async move |cx: &mut AsyncApp| {
+            cx.background_executor()
+                .timer(Duration::from_secs(u64::from(minutes) * 60))
+                .await;
+            cx.update(|cx| {
+                let this = cx.global_mut::<Self>();
+                let Some(entry) = this.entries.iter_mut().find(|entry| entry.key == key) else {
+                    return;
+                };
+                entry.snoozed_until = None;
+                entry.posted = unix_now();
+                this.entries
+                    .sort_by_key(|entry| std::cmp::Reverse(entry.posted));
+                Banners::arrive(&[key], cx);
+                Badges::count(cx);
+            })
+            .ok();
+        });
+        back.detach();
+        Badges::count(cx);
+    }
+
+    /// The picture of a toast of the application `app_id` that the toast
+    /// names `src`, once it was read.
+    pub fn picture(&self, app_id: &str, src: &str) -> Icon {
+        { self.pictures.get(&(app_id.to_owned(), src.to_owned())) }
+            .cloned()
+            .flatten()
+    }
+
+    /// Whether the toast of a notification titled `title` was read from
+    /// Windows' notification database while Tessera runs; the self test
+    /// asks it after it sent a toast.
+    #[allow(
+        dead_code,
+        reason = "read by the report of windows-selftest after merge"
+    )]
+    pub fn payload_seen(title: &str) -> bool {
+        NotificationDatabase::seen(title)
+    }
+
+    /// What Windows' own do not disturb lets through, while it is
+    /// followed.
+    pub fn windows_quiet(&self) -> Option<QuietProfile> {
+        self.windows_quiet
+    }
+
+    /// What the settings of Windows say of the application `app_id`,
+    /// while they are followed; everything on otherwise.
+    pub fn app_settings(&self, app_id: &str) -> AppNotificationSettings {
+        self.app_settings.get(app_id).copied().unwrap_or_default()
+    }
+
+    /// The jobs on files that run, oldest first.
+    pub fn jobs(&self) -> &[Job] {
+        &self.jobs
     }
 
     /// Takes the notifications `keys` away, here and from the notification
