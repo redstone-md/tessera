@@ -248,6 +248,51 @@ impl Properties {
     }
 }
 
+/// Reads properties of files on the thread that made it, which it readies
+/// for the Shell (COM, apartment-threaded) for as long as it lives: for a
+/// thread of Tessera's own that reads many files one after another, as a
+/// search does, where handing each file to another thread would cost more
+/// than reading it. It cannot be sent to another thread.
+pub struct PropertyReader {
+    /// Whether COM was initialized by it, and is to be left by it.
+    initialized: bool,
+    _alone: std::marker::PhantomData<*const ()>,
+}
+
+impl PropertyReader {
+    pub fn new() -> Self {
+        use windows::Win32::System::Com::{
+            COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx,
+        };
+        // SAFETY: COM is initialized on this thread for the life of the
+        // reader, which stays on it, and left in `drop` only where this
+        // initialized it.
+        let initialized =
+            unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) }
+                .is_ok();
+        Self {
+            initialized,
+            _alone: std::marker::PhantomData,
+        }
+    }
+
+    /// The values of `wanted` of the file at `path`, `None` where it has
+    /// none; it blocks while the property handler of its kind reads it.
+    pub fn read(&self, path: &Path, wanted: &[FileProperty]) -> Vec<Option<PropertyValue>> {
+        read_values(path, wanted)
+    }
+}
+
+impl Drop for PropertyReader {
+    fn drop(&mut self) {
+        if self.initialized {
+            // SAFETY: COM was initialized by this reader on this thread,
+            // and everything read through it is gone.
+            unsafe { windows::Win32::System::Com::CoUninitialize() };
+        }
+    }
+}
+
 /// Whether `error` says the file is held open by another program.
 fn shared_away(error: &anyhow::Error) -> bool {
     use windows::Win32::Foundation::{

@@ -212,6 +212,7 @@ pub use preview_host::{PreviewColors, PreviewHost, PreviewShown};
 pub use privacy::{Capability, CapabilityUse, PrivacyWatch};
 pub use processes::RunningProcess;
 pub use program_path::{expand_variables, find_program, recent_folder};
+pub use properties::PropertyReader;
 pub use properties::{FileProperty, Properties, PropertyEdit, PropertyValue, split_items};
 pub use quick_access::QuickFolder;
 pub use quick_access::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
