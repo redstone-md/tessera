@@ -2122,6 +2122,40 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Windows has no setting for a battery charge limit; where the battery has one, the maker's own app sets it.",
         "В Windows нет настройки предела заряда батареи; где он есть, его задаёт приложение производителя.",
     ),
+    // shell-services: the services of the shell for other programs.
+    ("Shell services", "Службы оболочки"),
+    (
+        "Record what programs ask of the shell",
+        "Записывать, что программы просят у оболочки",
+    ),
+    (
+        "As the shell, writes the messages its windows leave unanswered to shell-messages.log in Tessera's local data folder.",
+        "В режиме оболочки записывает сообщения, оставленные её окнами без ответа, в shell-messages.log в локальной папке данных Tessera.",
+    ),
+    (
+        "Answer the program manager's DDE",
+        "Отвечать на DDE диспетчера программ",
+    ),
+    (
+        "As the shell, old installers can make groups and shortcuts of the Start menu.",
+        "В режиме оболочки старые установщики могут создавать группы и ярлыки меню «Пуск».",
+    ),
+    (
+        "Start the objects of ShellServiceObjects",
+        "Запускать объекты ShellServiceObjects",
+    ),
+    (
+        "As the shell, the objects programs register to start with Explorer start with Tessera.",
+        "В режиме оболочки объекты, которые программы регистрируют для запуска с Проводником, запускаются с Tessera.",
+    ),
+    (
+        "Serve the change notifications of the Shell",
+        "Обслуживать уведомления оболочки об изменениях",
+    ),
+    (
+        "Not available yet: the protocol waits to be confirmed on Windows.",
+        "Пока недоступно: протокол ждёт подтверждения в Windows.",
+    ),
 ];
 
 #[cfg(test)]

@@ -241,6 +241,18 @@ media_keys = true        # the keys of the volume and of media work as with Expl
 
 As the shell, `[workspaces]` without `own` keeps four workspaces of Tessera's own, as the virtual desktops of Windows are part of Explorer.
 
+`[shell_services]` says which of the services Explorer hosts for other programs Tessera hosts as the shell ([SHELL.md](SHELL.md#services-for-other-programs) says what each does and what is not verified); beside Explorer it changes nothing:
+
+```toml
+[shell_services]
+log_messages = true      # write the messages the desktop and the task manager window leave unanswered to %LOCALAPPDATA%\tessera\shell-messages.log
+dde = true               # answer the program manager's DDE (PROGMAN), through which old installers make groups and shortcuts of the Start menu
+service_objects = false  # start the objects registered under ShellServiceObjects with the shell, and close them at its end
+change_server = false    # serve the Shell's change notifications; not available yet, Tessera only says so at its start
+```
+
+The log writes the first three messages of each number on each window whole and counts the others, at most 120 lines a minute, with the counts every minute while they change; it is started anew past 4 MB, keeping the last one as `shell-messages.old.log`. `dde` and `service_objects` take effect when changed while Tessera runs; `log_messages` too. The list of folder windows (`ShellWindows`) and the desktop's view need no setting: they are served as the shell. **Shell services** under **Session** in the settings holds the four switches.
+
 ## Startup programs
 
 When Tessera is the shell of the session, it starts what Explorer would start at sign-in, once per session, a moment after the bars are up; beside Explorer it starts nothing, as Explorer does it. `[startup]` changes that:

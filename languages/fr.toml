@@ -1180,3 +1180,13 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Clipboard and screenshots" = "Presse-papiers et captures d'écran"
 "Displays and power" = "Écrans et alimentation"
 "Session" = "Session"
+# shell-services: the services of the shell for other programs.
+"Shell services" = "Services du shell"
+"Record what programs ask of the shell" = "Enregistrer ce que les programmes demandent au shell"
+"As the shell, writes the messages its windows leave unanswered to shell-messages.log in Tessera's local data folder." = "En tant que shell, écrit les messages laissés sans réponse par ses fenêtres dans shell-messages.log, dans le dossier de données locales de Tessera."
+"Answer the program manager's DDE" = "Répondre au DDE du gestionnaire de programmes"
+"As the shell, old installers can make groups and shortcuts of the Start menu." = "En tant que shell, les anciens programmes d'installation peuvent créer des groupes et des raccourcis du menu Démarrer."
+"Start the objects of ShellServiceObjects" = "Démarrer les objets de ShellServiceObjects"
+"As the shell, the objects programs register to start with Explorer start with Tessera." = "En tant que shell, les objets que les programmes enregistrent pour démarrer avec l'Explorateur démarrent avec Tessera."
+"Serve the change notifications of the Shell" = "Servir les notifications de modification du shell"
+"Not available yet: the protocol waits to be confirmed on Windows." = "Pas encore disponible : le protocole attend d'être confirmé sous Windows."

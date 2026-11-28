@@ -1180,3 +1180,13 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Clipboard and screenshots" = "Буфер обміну та знімки екрана"
 "Displays and power" = "Дисплеї та живлення"
 "Session" = "Сеанс"
+# shell-services: the services of the shell for other programs.
+"Shell services" = "Служби оболонки"
+"Record what programs ask of the shell" = "Записувати, що програми просять в оболонки"
+"As the shell, writes the messages its windows leave unanswered to shell-messages.log in Tessera's local data folder." = "У режимі оболонки записує повідомлення, залишені її вікнами без відповіді, до shell-messages.log у локальній теці даних Tessera."
+"Answer the program manager's DDE" = "Відповідати на DDE диспетчера програм"
+"As the shell, old installers can make groups and shortcuts of the Start menu." = "У режимі оболонки старі інсталятори можуть створювати групи та ярлики меню «Пуск»."
+"Start the objects of ShellServiceObjects" = "Запускати об'єкти ShellServiceObjects"
+"As the shell, the objects programs register to start with Explorer start with Tessera." = "У режимі оболонки об'єкти, які програми реєструють для запуску з Провідником, запускаються з Tessera."
+"Serve the change notifications of the Shell" = "Обслуговувати сповіщення оболонки про зміни"
+"Not available yet: the protocol waits to be confirmed on Windows." = "Поки недоступно: протокол чекає на підтвердження у Windows."
