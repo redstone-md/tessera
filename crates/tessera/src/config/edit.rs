@@ -2700,6 +2700,167 @@ fn edit_value(value: &toml::Value) -> Option<Value> {
 mod tiling_override_tests {
     use super::*;
     use crate::tiling::OverrideKind;
+// edges-snap: the hot corners and edges of the displays, and the named
+// layouts of the snap layouts.
+
+impl ConfigFile {
+    /// The `[[corner]]` entries of the file, made where there are none.
+    fn corner_entries(&mut self) -> Option<&mut ArrayOfTables> {
+        let item = self
+            .document
+            .entry("corner")
+            .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+        item.as_array_of_tables_mut()
+    }
+
+    /// Appends `corner` as a `[[corner]]`, its keys in their order.
+    pub fn add_corner(&mut self, corner: &toml::Table) -> bool {
+        let Some(entry) = edit_table(corner) else {
+            return false;
+        };
+        let Some(corners) = self.corner_entries() else {
+            return false;
+        };
+        corners.push(entry);
+        true
+    }
+
+    /// Has the `[[corner]]` at `index` hold the keys of `corner` and no
+    /// others; the comments above it stay.
+    pub fn set_corner(&mut self, index: usize, corner: &toml::Table) -> bool {
+        let Some(entry) = edit_table(corner) else {
+            return false;
+        };
+        let corners = self.document.get_mut("corner");
+        let Some(corners) = corners.and_then(Item::as_array_of_tables_mut) else {
+            return false;
+        };
+        let Some(old) = corners.get_mut(index) else {
+            return false;
+        };
+        old.clear();
+        for (key, item) in entry.iter() {
+            old.insert(key, item.clone());
+        }
+        true
+    }
+
+    /// Takes the `[[corner]]` at `index` out.
+    pub fn remove_corner(&mut self, index: usize) -> bool {
+        let corners = self.document.get_mut("corner");
+        let Some(corners) = corners.and_then(Item::as_array_of_tables_mut) else {
+            return false;
+        };
+        if index >= corners.len() {
+            return false;
+        }
+        corners.remove(index);
+        if corners.is_empty() {
+            self.document.remove("corner");
+        }
+        true
+    }
+
+    /// Has the `[[snap.layout]]` called `name` hold `zones`, each
+    /// `[x, y, width, height]` in shares of the work area, or appends one
+    /// of that name. A layout without a `name` is called by its number
+    /// among them, from 1, and keeps having none.
+    pub fn set_snap_layout(&mut self, name: &str, zones: &[[f32; 4]]) -> bool {
+        let name = name.trim();
+        if name.is_empty() || zones.is_empty() {
+            return false;
+        }
+        let snap = self.document.entry("snap").or_insert_with(|| {
+            let mut table = Table::new();
+            table.set_implicit(true);
+            Item::Table(table)
+        });
+        let Some(snap) = snap.as_table_mut() else {
+            return false;
+        };
+        let layouts = snap
+            .entry("layout")
+            .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+        let Some(layouts) = layouts.as_array_of_tables_mut() else {
+            return false;
+        };
+        let mut rects = Array::new();
+        for zone in zones {
+            let mut rect = Array::new();
+            for share in zone {
+                rect.push((f64::from(*share) * 1000.).round() / 1000.);
+            }
+            rects.push(rect);
+        }
+        match snap_layout_at(layouts, name) {
+            Some(index) => {
+                let Some(layout) = layouts.get_mut(index) else {
+                    return false;
+                };
+                layout.insert("zones", value(rects));
+            }
+            None => {
+                let mut layout = Table::new();
+                layout.insert("name", value(name));
+                layout.insert("zones", value(rects));
+                layouts.push(layout);
+            }
+        }
+        true
+    }
+
+    /// Takes the `[[snap.layout]]` called `name` out, as
+    /// [`Self::set_snap_layout`] calls layouts; whether there was one.
+    pub fn remove_snap_layout(&mut self, name: &str) -> bool {
+        let Some(snap) = self.document.get_mut("snap").and_then(Item::as_table_mut) else {
+            return false;
+        };
+        let layouts = snap.get_mut("layout");
+        let Some(layouts) = layouts.and_then(Item::as_array_of_tables_mut) else {
+            return false;
+        };
+        let Some(index) = snap_layout_at(layouts, name.trim()) else {
+            return false;
+        };
+        layouts.remove(index);
+        if layouts.is_empty() {
+            snap.remove("layout");
+        }
+        if snap.is_empty() {
+            self.document.remove("snap");
+        }
+        true
+    }
+}
+
+/// `table` as the file writes a table, or `None` where a value of it
+/// cannot be written.
+fn edit_table(table: &toml::Table) -> Option<Table> {
+    let mut entry = Table::new();
+    for (key, entry_value) in table {
+        let written: Value = entry_value.to_string().parse().ok()?;
+        entry.insert(key, Item::Value(written));
+    }
+    Some(entry)
+}
+
+/// The place among `layouts` of the one called `name`: by its `name`, or
+/// by its number from 1 where it has none.
+fn snap_layout_at(layouts: &ArrayOfTables, name: &str) -> Option<usize> {
+    let mut entries = layouts.iter().enumerate();
+    entries
+        .find(
+            |(index, layout)| match layout.get("name").and_then(Item::as_str) {
+                Some(own) => own == name,
+                None => name == (index + 1).to_string(),
+            },
+        )
+        .map(|(index, _)| index)
+}
+
+#[cfg(test)]
+mod edges_snap_tests {
+    use super::*;
 
     fn file(text: &str) -> ConfigFile {
         ConfigFile::parse(text).unwrap()
@@ -3243,5 +3404,64 @@ mod key_entry_tests {
         bare.add_tiling_override(OverrideKind::Display);
         assert!(bare.remove_tiling_override(OverrideKind::Display, 0));
         assert!(!bare.document.to_string().contains("tiling"));
+    fn corner(text: &str) -> toml::Table {
+        toml::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn corners_are_added_changed_and_taken_out_with_their_comments() {
+        let mut edited =
+            file("# Mine.\n[[corner]]\n# The launcher.\nat = \"top-left\"\npopup = \"launcher\"\n");
+        assert!(edited.add_corner(&corner("at = \"right\"\naction = \"popup\"\narg = \"a\"")));
+        edited.config().expect("it is usable");
+        assert!(edited.set_corner(
+            0,
+            &corner("at = \"top-left\"\npopup = \"calendar\"\ndelay = 300")
+        ));
+        let text = edited.document.to_string();
+        assert!(text.contains("# Mine."), "{text}");
+        assert!(!text.contains("launcher"), "{text}");
+        assert!(text.contains("delay = 300"), "{text}");
+        assert!(!edited.set_corner(5, &corner("at = \"top\"")));
+        let config = edited.config().expect("it stays usable");
+        assert_eq!(config.corners.len(), 2);
+        assert!(edited.remove_corner(1));
+        assert!(edited.remove_corner(0));
+        assert!(!edited.remove_corner(0));
+        assert!(!edited.document.to_string().contains("[[corner]]"));
+    }
+
+    #[test]
+    fn snap_layouts_are_called_by_name_or_number() {
+        let mut edited = file("[[snap.layout]]\nzones = [[0, 0, 1, 1]]\n");
+        assert!(edited.set_snap_layout("wide", &[[0., 0., 0.7, 1.], [0.7, 0., 0.3, 1.]]));
+        let text = edited.document.to_string();
+        assert!(text.contains("name = \"wide\""), "{text}");
+        assert!(text.contains("[0.7, 0.0, 0.3, 1.0]"), "{text}");
+        edited.config().expect("it is usable");
+        // The one without a name is the first.
+        assert!(edited.set_snap_layout("1", &[[0., 0., 0.5, 1.], [0.5, 0., 0.5, 1.]]));
+        let text = edited.document.to_string();
+        assert_eq!(text.matches("name =").count(), 1, "{text}");
+        assert!(text.contains("[0.5, 0.0, 0.5, 1.0]"), "{text}");
+        assert!(edited.remove_snap_layout("wide"));
+        assert!(!edited.remove_snap_layout("wide"));
+        assert!(edited.remove_snap_layout("1"));
+        assert_eq!(edited.document.to_string().trim(), "");
+        assert!(!edited.set_snap_layout(" ", &[[0., 0., 1., 1.]]));
+        assert!(!edited.set_snap_layout("empty", &[]));
+    }
+
+    #[test]
+    fn a_snap_layout_goes_beside_the_other_keys_of_snap() {
+        let mut edited = file("[snap]\ngap = 4\n");
+        assert!(edited.set_snap_layout("thirds", &[[0., 0., 0.333, 1.], [0.333, 0., 0.667, 1.]]));
+        let text = edited.document.to_string();
+        assert!(text.contains("gap = 4"), "{text}");
+        assert!(text.contains("[[snap.layout]]"), "{text}");
+        assert!(text.contains("0.333"), "{text}");
+        edited.config().expect("it is usable");
+        assert!(edited.remove_snap_layout("thirds"));
+        assert!(edited.document.to_string().contains("gap = 4"));
     }
 }

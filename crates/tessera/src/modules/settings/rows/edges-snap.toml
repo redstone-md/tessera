@@ -1,3 +1,122 @@
 # Rows of the settings filled by edges-snap. Format: modules/settings/rows.rs
 # (RowCard, and [[action]] titles). Plain labels are English texts of the
 # RUSSIAN table in i18n.rs.
+
+# The hot corners and edges of the displays, drawn as the displays stand.
+[[card]]
+section = "Screen edges"
+title = "Screen edges"
+page = "edges-editor"
+search = ["Hot corners"]
+
+# Snapping windows that are dragged to an edge, and the keys of [snap].
+# Every row may be unset: the configuration then decides, as for enabled,
+# which is on only where Tessera is the shell.
+[[card]]
+section = "Windows"
+title = "Snapping"
+table = "snap"
+search = ["Snap layouts", "Snap zones"]
+
+[[card.row]]
+key = "enabled"
+kind = "toggle"
+label = "Snap dragged windows"
+description = "Without a choice, only where Tessera is the shell."
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "edge"
+kind = "number"
+label = "Distance from an edge"
+min = 1
+max = 64
+unit = "px"
+default = 8
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "corner"
+kind = "number"
+label = "Distance from a corner for a quarter"
+min = 1
+max = 600
+unit = "px"
+default = 96
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "gap"
+kind = "number"
+label = "Gap"
+min = 0
+max = 64
+unit = "px"
+default = 0
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "assist"
+kind = "toggle"
+label = "Offer the other windows for the rest"
+default = true
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "hover"
+kind = "toggle"
+label = "Snap layouts over the maximize button"
+description = "Without a choice, as Snap dragged windows."
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "hover_delay"
+kind = "number"
+label = "Wait over the maximize button"
+min = 100
+max = 3000
+step = 50
+unit = "ms"
+default = 450
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "edge_switch"
+kind = "toggle"
+label = "Switch workspace at an edge while dragging"
+description = "Only Tessera's own workspaces take a window of another program along."
+default = false
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "edge_switch_delay"
+kind = "number"
+label = "Wait at the edge"
+min = 100
+max = 5000
+step = 50
+unit = "ms"
+default = 600
+optional = true
+unset_label = "Default"
+
+# The [[snap.layout]] and [[snap.zone]] entries, with the editor on the
+# screen.
+[[card]]
+section = "Windows"
+title = "Snap zones"
+page = "zones-editor"
+search = ["Snap layouts", "Edit on screen"]
+
+[[action]]
+name = "edit-zones"
+title = "Edit the snap zones"
+arg = "The name of a snap layout, or none for a new one"

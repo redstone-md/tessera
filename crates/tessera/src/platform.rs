@@ -59,6 +59,7 @@ pub use win32::{
     show_properties,
 };
 pub use win32::{ActiveTracking, GrabKey, MouseHook, PointerButton, PointerEvent};
+pub use win32::{Arranger, least_size};
 pub use win32::{Attributes, ExplorerSettings, NameRules, localized_candidates, shell_names};
 pub use win32::{AutoPlay, AutoPlayHandler, AutoPlayOffer, Chosen, Invoke, Medium};
 pub use win32::{Balloon, BalloonEvent};

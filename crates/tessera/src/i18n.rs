@@ -3315,6 +3315,125 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Заданное здесь важнее общего тайлинга всех экранов; более поздняя запись — важнее более ранней.",
     ),
     ("Tall with tabs", "Высокая с вкладками"),
+    // edges-snap: the screen edges, snapping and the editor of snap zones.
+    ("Search actions", "Искать действия"),
+    ("What it is done with", "С чем выполняется"),
+    (
+        "Type the program to start and its arguments.",
+        "Введите запускаемую программу и её аргументы.",
+    ),
+    ("Run a program", "Выполнить программу"),
+    (
+        "The titles are those of the Shortcuts page; an action without one is shown by its name.",
+        "Названия взяты со страницы «Сочетания клавиш»; действие без названия показано по имени.",
+    ),
+    ("{} ms", "{} мс"),
+    ("Nothing happens here.", "Здесь ничего не происходит."),
+    ("Choose an action", "Выбрать действие"),
+    (
+        "The program and its arguments, a part with spaces in double quotes.",
+        "Программа и её аргументы; часть с пробелами — в двойных кавычках.",
+    ),
+    (
+        "Choose a corner or an edge of a display to say what the pointer resting there does. Nothing is done while a button is held or a window fills the display.",
+        "Выберите угол или край экрана, чтобы задать, что делает задержавшийся там указатель. Ничего не происходит, пока нажата кнопка или окно занимает весь экран.",
+    ),
+    (
+        "Windows names no display.",
+        "Windows не называет ни одного экрана.",
+    ),
+    ("Snap layouts", "Макеты прикрепления"),
+    (
+        "These are the six layouts of Windows. Saving a layout of your own shows yours in their place.",
+        "Это шесть макетов Windows. Если сохранить свой макет, вместо них будут показаны ваши.",
+    ),
+    ("Layout {}", "Макет {}"),
+    ("{} zones", "Зон: {}"),
+    ("Edit on screen", "Изменить на экране"),
+    (
+        "Its zones are not cut by straight lines from side to side, so it is changed in config.toml.",
+        "Его зоны не разделяются прямыми линиями от края до края, поэтому он меняется в config.toml.",
+    ),
+    (
+        "The editor opens on this display:",
+        "Редактор откроется на этом экране:",
+    ),
+    ("New layout", "Новый макет"),
+    (
+        "In the editor a click splits a zone, a line is dragged to move it, Enter saves and Esc cancels. Win+Alt+Z opens it where the keys of Windows are bound.",
+        "В редакторе щелчок делит зону, линию перетаскивают, чтобы сдвинуть, Enter сохраняет, Esc отменяет. Win+Alt+Z открывает его там, где назначены клавиши Windows.",
+    ),
+    ("Zones of Shift", "Зоны с Shift"),
+    (
+        "A window dragged with Shift held snaps to the zone under the pointer. They are [[snap.zone]] entries of config.toml.",
+        "Окно, перетаскиваемое с зажатым Shift, прикрепляется к зоне под указателем. Это записи [[snap.zone]] в config.toml.",
+    ),
+    ("There are none.", "Их нет."),
+    ("Name of the layout", "Имя макета"),
+    ("Give the layout a name.", "Дайте макету имя."),
+    (
+        "There is a layout named {} already.",
+        "Макет с именем {} уже есть.",
+    ),
+    ("The tiling keeps its own gap.", "У тайлинга свой отступ."),
+    ("Rests there first", "Задержка перед действием"),
+    ("Waits after a use", "Пауза после срабатывания"),
+    ("Split side by side", "Разделить по горизонтали"),
+    ("Split one above the other", "Разделить по вертикали"),
+    ("Merge", "Объединить"),
+    ("Snap layout", "Макет прикрепления"),
+    ("Tiling layout", "Макет тайлинга"),
+    (
+        "Click a zone to split it at the pointer; drag a line to move it. Enter saves, Esc cancels.",
+        "Щёлкните зону, чтобы разделить её у указателя; перетащите линию, чтобы сдвинуть её. Enter сохраняет, Esc отменяет.",
+    ),
+    (
+        "Click a line to merge the zones beside it. Enter saves, Esc cancels.",
+        "Щёлкните линию, чтобы объединить зоны по обе её стороны. Enter сохраняет, Esc отменяет.",
+    ),
+    ("Hot corners", "Активные углы"),
+    ("Snapping", "Прикрепление"),
+    ("Snap zones", "Зоны прикрепления"),
+    ("Snap dragged windows", "Прикреплять перетаскиваемые окна"),
+    (
+        "Without a choice, only where Tessera is the shell.",
+        "Без выбора — только там, где Tessera служит оболочкой.",
+    ),
+    ("Distance from an edge", "Расстояние до края"),
+    (
+        "Distance from a corner for a quarter",
+        "Расстояние до угла для четверти",
+    ),
+    (
+        "Offer the other windows for the rest",
+        "Предлагать остальные окна для оставшегося места",
+    ),
+    (
+        "Snap layouts over the maximize button",
+        "Макеты прикрепления над кнопкой развёртывания",
+    ),
+    (
+        "Without a choice, as Snap dragged windows.",
+        "Без выбора — как «Прикреплять перетаскиваемые окна».",
+    ),
+    (
+        "Wait over the maximize button",
+        "Задержка над кнопкой развёртывания",
+    ),
+    (
+        "Switch workspace at an edge while dragging",
+        "Переключать рабочее пространство у края при перетаскивании",
+    ),
+    (
+        "Only Tessera's own workspaces take a window of another program along.",
+        "Окно другой программы переносят с собой только собственные рабочие пространства Tessera.",
+    ),
+    ("Wait at the edge", "Задержка у края"),
+    ("Edit the snap zones", "Изменить зоны прикрепления"),
+    (
+        "The name of a snap layout, or none for a new one",
+        "Имя макета прикрепления или ничего для нового",
+    ),
 ];
 
 #[cfg(test)]

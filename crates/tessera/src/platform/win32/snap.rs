@@ -3,12 +3,13 @@
 
 //! What snapping windows needs to know of Windows: the displays with their
 //! work areas and scales, whether Windows arranges dragged windows itself,
-//! which window is under the pointer, and when the pointer rests on the
-//! maximize button of one.
+//! which window is under the pointer, when the pointer rests on the
+//! maximize button of one, how small a window can be made, and placing
+//! the windows that share edges together.
 
 use std::ffi::c_void;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock, PoisonError, mpsc};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
@@ -22,11 +23,12 @@ use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GA_ROOT, GetAncestor, GetClassNameW, GetForegroundWindow, GetWindowRect,
-    GetWindowThreadProcessId, HTBOTTOMRIGHT, HTLEFT, HTMAXBUTTON, IsWindowVisible,
-    SMTO_ABORTIFHUNG, SMTO_BLOCK, SPI_GETWINARRANGING, SPI_SETWINARRANGING,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageTimeoutW, SystemParametersInfoW, WM_NCHITTEST,
-    WindowFromPoint,
+    BeginDeferWindowPos, DeferWindowPos, EndDeferWindowPos, GA_ROOT, GetAncestor, GetClassNameW,
+    GetForegroundWindow, GetSystemMetrics, GetWindowRect, GetWindowThreadProcessId, HTBOTTOMRIGHT,
+    HTLEFT, HTMAXBUTTON, IsWindowVisible, MINMAXINFO, SM_CXMINTRACK, SM_CYMINTRACK,
+    SMTO_ABORTIFHUNG, SMTO_BLOCK, SPI_GETWINARRANGING, SPI_SETWINARRANGING, SWP_NOACTIVATE,
+    SWP_NOOWNERZORDER, SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageTimeoutW,
+    SystemParametersInfoW, WM_GETMINMAXINFO, WM_NCHITTEST, WindowFromPoint,
 };
 use windows::core::BOOL;
 
@@ -378,5 +380,152 @@ fn watch_hover() {
             rest.reported = true;
             let _ = hovers().0.try_send((window, point));
         }
+    }
+}
+
+/// How long a window is given to say how small it can be made.
+const LEAST_TIMEOUT: u32 = 100;
+
+/// The least width and height of what is seen of the window `id`, as the
+/// window answers `WM_GETMINMAXINFO`, without its invisible border; the
+/// least Windows gives any window where it does not answer in time. The
+/// window waits for its program, so this is asked away from the thread of
+/// the user interface.
+pub fn least_size(id: AppWindowId) -> (i32, i32) {
+    let hwnd = id.hwnd();
+    // SAFETY: the calls only read sizes; `info` and `whole` outlive them,
+    // the message gives up on a window that hangs or does not answer in
+    // time, and Windows copies `info` to and from the window's process.
+    unsafe {
+        let usual = (
+            GetSystemMetrics(SM_CXMINTRACK),
+            GetSystemMetrics(SM_CYMINTRACK),
+        );
+        let mut info = MINMAXINFO {
+            ptMinTrackSize: POINT {
+                x: usual.0,
+                y: usual.1,
+            },
+            ..Default::default()
+        };
+        let answered = SendMessageTimeoutW(
+            hwnd,
+            WM_GETMINMAXINFO,
+            WPARAM(0),
+            LPARAM(&raw mut info as isize),
+            SMTO_ABORTIFHUNG | SMTO_BLOCK,
+            LEAST_TIMEOUT,
+            None,
+        );
+        let (width, height) = match answered.0 != 0 {
+            true => (info.ptMinTrackSize.x, info.ptMinTrackSize.y),
+            false => usual,
+        };
+        let mut whole = RECT::default();
+        let (Some(seen), Ok(())) = (id.frame(), GetWindowRect(hwnd, &raw mut whole)) else {
+            return (width.max(1), height.max(1));
+        };
+        let border_x = (whole.right - whole.left) - (seen.right - seen.left);
+        let border_y = (whole.bottom - whole.top) - (seen.bottom - seen.top);
+        ((width - border_x).max(1), (height - border_y).max(1))
+    }
+}
+
+/// Windows to place together, each with what is to be seen of it.
+pub type Placements = Vec<(AppWindowId, ScreenRect)>;
+
+/// Places windows of other programs together in one step, as the edges a
+/// snapped window shares follow it. Windows sends the windows messages
+/// for this and waits for them, so it is done on a thread of its own; of
+/// the placements asked for meanwhile only the latest is made.
+pub struct Arranger;
+
+impl Arranger {
+    /// Has the windows of `placements` placed, each so that what is seen
+    /// of it covers its rect, without bringing any forward. A window that
+    /// hangs or is gone is left out.
+    pub fn place(placements: Placements) {
+        static SENDER: OnceLock<Option<Mutex<mpsc::Sender<Placements>>>> = OnceLock::new();
+        let sender = SENDER.get_or_init(|| {
+            let (send, receive) = mpsc::channel::<Placements>();
+            let started = thread::Builder::new()
+                .name("tessera shared edges".to_owned())
+                .spawn(move || {
+                    while let Ok(mut latest) = receive.recv() {
+                        while let Ok(newer) = receive.try_recv() {
+                            latest = newer;
+                        }
+                        arrange(&latest);
+                    }
+                });
+            match started {
+                Ok(_) => Some(Mutex::new(send)),
+                Err(error) => {
+                    report!("the windows that share edges are not moved together: {error}");
+                    None
+                }
+            }
+        });
+        if let Some(sender) = sender {
+            let sender = sender.lock().unwrap_or_else(PoisonError::into_inner);
+            let _ = sender.send(placements);
+        }
+    }
+}
+
+/// Places the windows of `placements` together, with what Windows calls
+/// one deferred placement.
+fn arrange(placements: &[(AppWindowId, ScreenRect)]) {
+    let mut wholes = Vec::with_capacity(placements.len());
+    for &(id, frame) in placements {
+        if id.is_hung() {
+            continue;
+        }
+        let Some(seen) = id.frame() else {
+            continue;
+        };
+        let mut whole = RECT::default();
+        // SAFETY: `whole` outlives the call, which tolerates a handle
+        // whose window has since been destroyed.
+        if unsafe { GetWindowRect(id.hwnd(), &raw mut whole) }.is_err() {
+            continue;
+        }
+        // The invisible border stays as wide as it is.
+        let placed = ScreenRect {
+            left: frame.left - (seen.left - whole.left),
+            top: frame.top - (seen.top - whole.top),
+            right: frame.right + (whole.right - seen.right),
+            bottom: frame.bottom + (whole.bottom - seen.bottom),
+        };
+        wholes.push((id, placed));
+    }
+    if wholes.is_empty() {
+        return;
+    }
+    let flags = SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE;
+    // SAFETY: the handle of the deferred placement is used only here and
+    // given back by EndDeferWindowPos; a window that is gone makes
+    // DeferWindowPos fail, which gives the handle back as well.
+    unsafe {
+        let Ok(mut deferred) = BeginDeferWindowPos(wholes.len() as i32) else {
+            return;
+        };
+        for (id, rect) in wholes {
+            let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+            match DeferWindowPos(
+                deferred,
+                id.hwnd(),
+                None,
+                rect.left,
+                rect.top,
+                width,
+                height,
+                flags,
+            ) {
+                Ok(next) => deferred = next,
+                Err(_) => return,
+            }
+        }
+        let _ = EndDeferWindowPos(deferred);
     }
 }

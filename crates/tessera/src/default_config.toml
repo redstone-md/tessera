@@ -1213,10 +1213,21 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 #   hover        whether the snap layouts open when the pointer rests on
 #                the maximize button of a window (as enabled)
 #   hover_delay  how long it rests there first, in milliseconds (450)
+#   edge_switch  whether a window dragged against the outer left or right
+#                edge of the displays (top or bottom where the workspaces
+#                stand in rows) goes to the workspace beside, and the
+#                workspace with it; Tessera's own workspaces only (false)
+#   edge_switch_delay  how long it is pushed there first, in
+#                milliseconds (600)
 # [[snap.zone]] has rect = [x, y, width, height] in shares of the work area
 # of a display, and display, counted from 1 from the left, for one display
 # only. [[snap.layout]] entries, each with zones, a list of such rects,
 # replace the six layouts of Windows in the snap layouts (win+z).
+# A [[snap.layout]] may have a name, which the editor of snap zones
+# (edit-zones, win+alt+z where the keys of Windows are bound) and the
+# settings call it by; one without is called by its number from 1.
+# Windows Tessera snapped share their edges: resizing one along an edge it
+# shares with others has theirs follow.
 # The keys of snapping are the actions snap, snap-display, snap-layouts and
 # window-menu of the [[key]] entries above. While Tessera snaps, Windows'
 # own Win+arrows and Win+Z are off with its snapping: they work only where
@@ -1418,6 +1429,9 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # once, and again after the pointer has gone some way off; nothing is done
 # while a button of the pointer is held or the window in front fills the
 # display. A corner beats an edge it lies on.
+# cooldown is how long it waits after it was used before it can be used
+# again, in milliseconds (0). Settings > Screen edges draws the displays
+# and edits these entries.
 #
 # [[corner]]
 # at = "top-left"
