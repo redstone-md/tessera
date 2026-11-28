@@ -21,7 +21,9 @@
 //! program offers beside a text are copied out with it, up to
 //! [`RICH_LIMIT`] bytes each, so that the text is put back with them. Each
 //! copy also says which program owned the clipboard, for the actions of
-//! the clipboard that leave some programs alone.
+//! the clipboard that leave some programs alone. [`put_on_clipboard`]
+//! puts something on the clipboard where no watch runs, as a screenshot
+//! that is copied does.
 #![allow(unsafe_code)]
 
 use std::cell::RefCell;
@@ -370,6 +372,67 @@ impl ClipboardWriter {
         }
         answered
     }
+}
+
+/// Puts `offer` on the clipboard in place of what is there, without a
+/// watch: a window of its own, made for the moment it takes, owns what is
+/// put there. Another program may hold the clipboard, which is waited for
+/// a moment, so it is to be called away from the thread that draws. A
+/// watch that runs takes what is put there for a new copy, as it would
+/// take a copy in another program.
+pub fn put_on_clipboard(offer: Offer) -> Result<(), String> {
+    // SAFETY: the call only reads the handle of the program.
+    let module = unsafe { GetModuleHandleW(None) }
+        .map_err(|error| format!("the module handle could not be read: {error}"))?;
+    static REGISTERED: OnceLock<bool> = OnceLock::new();
+    let registered = REGISTERED.get_or_init(|| {
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(put_window),
+            hInstance: module.into(),
+            lpszClassName: PUT_CLASS,
+            ..Default::default()
+        };
+        // SAFETY: the class structure and its strings outlive the call,
+        // and `put_window` has the signature of a window procedure.
+        unsafe { RegisterClassW(&raw const class) != 0 }
+    });
+    if !registered {
+        return Err("the window class could not be registered".to_owned());
+    }
+    // SAFETY: the class is registered and the strings are constants; the
+    // message-only window is destroyed below, on this thread.
+    let window = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            PUT_CLASS,
+            w!("Tessera clipboard"),
+            WINDOW_STYLE(0),
+            0,
+            0,
+            0,
+            0,
+            Some(HWND_MESSAGE),
+            None,
+            Some(module.into()),
+            None,
+        )
+    }
+    .map_err(|error| format!("no window could own the clipboard: {error}"))?;
+    let put = put(window, offer);
+    // SAFETY: the window was made on this thread above. What it put on the
+    // clipboard stays there: none of it is rendered late.
+    let _ = unsafe { DestroyWindow(window) };
+    put
+}
+
+/// The class of the windows [`put_on_clipboard`] makes.
+const PUT_CLASS: PCWSTR = w!("Tessera.ClipboardPut");
+
+/// The window procedure of [`put_on_clipboard`], which leaves every message
+/// to Windows.
+unsafe extern "system" fn put_window(window: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    // SAFETY: the arguments are passed on as they came.
+    unsafe { DefWindowProcW(window, message, w, l) }
 }
 
 /// Brings `window` in front and presses Ctrl+V in it, once the keys the

@@ -36,6 +36,7 @@ pub use win32::display_at;
 pub use win32::font_families;
 pub use win32::on_resizing_border;
 pub use win32::paint_desktop;
+pub use win32::put_on_clipboard;
 pub use win32::rename_new;
 pub use win32::save_screenshot;
 pub use win32::spatial_sound;
@@ -66,6 +67,7 @@ pub use win32::{
 };
 pub use win32::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLight};
 pub use win32::{Capability, CapabilityUse, PrivacyWatch};
+pub use win32::{Capture, CaptureArea, capture, front_window, virtual_screen};
 pub use win32::{Clip, ClipboardWatch, Offer, paste_into};
 pub use win32::{CloudState, Overlays};
 pub use win32::{Copied, Rich};
@@ -143,6 +145,7 @@ pub use win32::{RunHistory, RunningProcess};
 pub use win32::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
 pub use win32::{SystemWallpaper, WallpaperPosition, user_locale};
 pub use win32::{WallpaperAnswers, WallpaperRequest, WallpaperServer};
+pub use win32::{encode_picture, render_text, screenshots_folder};
 pub use win32::{expand_variables, find_program, recent_folder};
 #[allow(
     unused_imports,
@@ -150,3 +153,4 @@ pub use win32::{expand_variables, find_program, recent_folder};
 )]
 pub use win32::{explorer_running, shell_mode};
 pub use win32::{terminal, windows_terminal};
+pub use win32::{window_frames, window_under_pointer};

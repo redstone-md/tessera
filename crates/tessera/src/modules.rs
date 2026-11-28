@@ -36,6 +36,7 @@ mod problems;
 mod quick;
 mod run;
 mod runner;
+mod screenshot;
 mod session;
 mod settings;
 mod settings_parts;
@@ -118,6 +119,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(wifi::WifiModule),
         Box::new(windows::WindowsModule),
         Box::new(windows_keys::WindowsKeysModule),
+        Box::new(screenshot::ScreenshotModule::of(&config.screenshot)),
         Box::new(winx::WinxModule),
         Box::new(workspaces::WorkspacesModule),
         Box::new(overview::OverviewModule),
