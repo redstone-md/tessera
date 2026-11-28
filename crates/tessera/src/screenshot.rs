@@ -657,7 +657,7 @@ pub fn render_image(pixels: &RgbaImage) -> Arc<RenderImage> {
 }
 
 /// The display of GPUI that is at `display`, for a window to open on.
-fn gpui_display(display: &crate::platform::Display, cx: &App) -> Option<gpui::DisplayId> {
+pub(crate) fn gpui_display(display: &crate::platform::Display, cx: &App) -> Option<gpui::DisplayId> {
     let (x, y) = (
         display.frame.left as f32 / display.scale,
         display.frame.top as f32 / display.scale,
