@@ -18,6 +18,7 @@ mod sidebar;
 mod tabs;
 mod thumbs;
 mod view;
+mod windows_restore;
 
 use std::path::{Path, PathBuf};
 
@@ -33,6 +34,7 @@ pub use model::{Grouping, Location, Look, size_text};
 use session::{Opening, Session};
 pub use thumbs::FileViewConfig;
 use view::FilesView;
+pub use windows_restore::WindowsRestore;
 
 use crate::actions::{Action, Actions};
 use crate::autoplay::{self, AutoPlayList, AutoPlayWhen};
