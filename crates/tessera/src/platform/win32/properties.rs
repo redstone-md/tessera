@@ -26,6 +26,10 @@ use windows::Win32::Storage::EnhancedStorage::{
     PKEY_Image_Dimensions, PKEY_Keywords, PKEY_Media_Duration, PKEY_Photo_CameraManufacturer,
     PKEY_Photo_CameraModel, PKEY_Photo_DateTaken, PKEY_Rating, PKEY_Title,
 };
+use windows::Win32::Storage::EnhancedStorage::{
+    PKEY_Media_Year, PKEY_Music_AlbumTitle, PKEY_Music_Artist, PKEY_Music_Genre,
+    PKEY_Music_TrackNumber, PKEY_StorageProviderSharingStatus, PKEY_StorageProviderState,
+};
 use windows::Win32::System::Com::CoTaskMemAlloc;
 use windows::Win32::System::Com::StructuredStorage::{
     InitPropVariantFromStringAsVector, PROPVARIANT, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
@@ -71,9 +75,118 @@ pub enum FileProperty {
     /// The attributes as Explorer writes them, as `RA` for read-only and
     /// archive.
     Attributes,
+    /// The number of a song on its album: Explorer's column "#".
+    Track,
+    /// Explorer's column "Contributing artists".
+    Artists,
+    Album,
+    Year,
+    Genre,
+    /// The state the sync provider of a cloud folder gives a file
+    /// (`System.StorageProviderState`), as a number of [`SyncState`].
+    SyncState,
+    /// Whether the sync provider shares a file
+    /// (`System.StorageProviderSharingStatus`).
+    Sharing,
+}
+
+/// The states of a file of a cloud folder, by the numbers its sync
+/// provider gives them (`System.StorageProviderState`, as propkey.h lists
+/// them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncState {
+    Syncing,
+    Error,
+    Warning,
+    Excluded,
+}
+
+impl SyncState {
+    /// The state the number `state` gives, where it is one shown beside
+    /// the states Explorer draws with overlays (in sync, kept, online).
+    pub fn of(state: u64) -> Option<Self> {
+        match state {
+            // Waiting to go up or down, going, or waiting otherwise.
+            4..=6 | 10 => Some(Self::Syncing),
+            7 => Some(Self::Error),
+            8 => Some(Self::Warning),
+            9 => Some(Self::Excluded),
+            _ => None,
+        }
+    }
+
+    /// What the Status column calls it, in English, as the table of texts
+    /// has it.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Syncing => "Syncing",
+            Self::Error => "Sync error",
+            Self::Warning => "Sync warning",
+            Self::Excluded => "Excluded from sync",
+        }
+    }
+}
+
+/// Whether the number `status` of `System.StorageProviderSharingStatus`
+/// says a file is shared with others.
+pub fn shared(status: u64) -> bool {
+    use windows::Win32::Storage::EnhancedStorage::{
+        STORAGE_PROVIDER_SHARINGSTATUS_PUBLIC, STORAGE_PROVIDER_SHARINGSTATUS_PUBLIC_COOWNED,
+        STORAGE_PROVIDER_SHARINGSTATUS_PUBLIC_OWNED, STORAGE_PROVIDER_SHARINGSTATUS_SHARED,
+        STORAGE_PROVIDER_SHARINGSTATUS_SHARED_COOWNED, STORAGE_PROVIDER_SHARINGSTATUS_SHARED_OWNED,
+    };
+    [
+        STORAGE_PROVIDER_SHARINGSTATUS_SHARED,
+        STORAGE_PROVIDER_SHARINGSTATUS_SHARED_OWNED,
+        STORAGE_PROVIDER_SHARINGSTATUS_SHARED_COOWNED,
+        STORAGE_PROVIDER_SHARINGSTATUS_PUBLIC,
+        STORAGE_PROVIDER_SHARINGSTATUS_PUBLIC_OWNED,
+        STORAGE_PROVIDER_SHARINGSTATUS_PUBLIC_COOWNED,
+    ]
+    .contains(&u32::try_from(status).unwrap_or(0))
 }
 
 impl FileProperty {
+    /// Every property Tessera reads.
+    pub const ALL: [Self; 20] = [
+        Self::Title,
+        Self::Authors,
+        Self::Rating,
+        Self::Tags,
+        Self::Comment,
+        Self::Dimensions,
+        Self::Length,
+        Self::DateTaken,
+        Self::CameraMaker,
+        Self::CameraModel,
+        Self::DateCreated,
+        Self::Owner,
+        Self::Attributes,
+        Self::Track,
+        Self::Artists,
+        Self::Album,
+        Self::Year,
+        Self::Genre,
+        Self::SyncState,
+        Self::Sharing,
+    ];
+
+    /// What "More…" of the menu of the headings offers as columns beside
+    /// [`Self::COLUMNS`], in its order.
+    pub const MORE: [Self; 11] = [
+        Self::Title,
+        Self::Rating,
+        Self::Tags,
+        Self::Comment,
+        Self::Track,
+        Self::Artists,
+        Self::Album,
+        Self::Year,
+        Self::Genre,
+        Self::CameraMaker,
+        Self::CameraModel,
+    ];
+
     /// What the details pane shows, in its order.
     pub const DETAILS: [Self; 13] = [
         Self::Title,
@@ -119,6 +232,13 @@ impl FileProperty {
             Self::DateCreated => "Date created",
             Self::Owner => "Owner",
             Self::Attributes => "Attributes",
+            Self::Track => "#",
+            Self::Artists => "Contributing artists",
+            Self::Album => "Album",
+            Self::Year => "Year",
+            Self::Genre => "Genre",
+            Self::SyncState => "Sync state",
+            Self::Sharing => "Sharing",
         }
     }
 
@@ -138,12 +258,19 @@ impl FileProperty {
             Self::DateCreated => "date-created",
             Self::Owner => "owner",
             Self::Attributes => "attributes",
+            Self::Track => "track",
+            Self::Artists => "artists",
+            Self::Album => "album",
+            Self::Year => "year",
+            Self::Genre => "genre",
+            Self::SyncState => "sync-state",
+            Self::Sharing => "sharing",
         }
     }
 
     /// The property the files of Tessera call `name`.
     pub fn named(name: &str) -> Option<Self> {
-        Self::DETAILS
+        Self::ALL
             .into_iter()
             .find(|property| property.name() == name)
     }
@@ -171,6 +298,13 @@ impl FileProperty {
             Self::DateCreated => PKEY_DateCreated,
             Self::Owner => PKEY_FileOwner,
             Self::Attributes => PKEY_FileAttributes,
+            Self::Track => PKEY_Music_TrackNumber,
+            Self::Artists => PKEY_Music_Artist,
+            Self::Album => PKEY_Music_AlbumTitle,
+            Self::Year => PKEY_Media_Year,
+            Self::Genre => PKEY_Music_Genre,
+            Self::SyncState => PKEY_StorageProviderState,
+            Self::Sharing => PKEY_StorageProviderSharingStatus,
         }
     }
 }
@@ -248,6 +382,51 @@ impl Properties {
     }
 }
 
+/// Reads properties of files on the thread that made it, which it readies
+/// for the Shell (COM, apartment-threaded) for as long as it lives: for a
+/// thread of Tessera's own that reads many files one after another, as a
+/// search does, where handing each file to another thread would cost more
+/// than reading it. It cannot be sent to another thread.
+pub struct PropertyReader {
+    /// Whether COM was initialized by it, and is to be left by it.
+    initialized: bool,
+    _alone: std::marker::PhantomData<*const ()>,
+}
+
+impl PropertyReader {
+    pub fn new() -> Self {
+        use windows::Win32::System::Com::{
+            COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx,
+        };
+        // SAFETY: COM is initialized on this thread for the life of the
+        // reader, which stays on it, and left in `drop` only where this
+        // initialized it.
+        let initialized =
+            unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) }
+                .is_ok();
+        Self {
+            initialized,
+            _alone: std::marker::PhantomData,
+        }
+    }
+
+    /// The values of `wanted` of the file at `path`, `None` where it has
+    /// none; it blocks while the property handler of its kind reads it.
+    pub fn read(&self, path: &Path, wanted: &[FileProperty]) -> Vec<Option<PropertyValue>> {
+        read_values(path, wanted)
+    }
+}
+
+impl Drop for PropertyReader {
+    fn drop(&mut self) {
+        if self.initialized {
+            // SAFETY: COM was initialized by this reader on this thread,
+            // and everything read through it is gone.
+            unsafe { windows::Win32::System::Com::CoUninitialize() };
+        }
+    }
+}
+
 /// Whether `error` says the file is held open by another program.
 fn shared_away(error: &anyhow::Error) -> bool {
     use windows::Win32::Foundation::{
@@ -322,7 +501,13 @@ fn read_value(store: &IPropertyStore, property: FileProperty) -> Option<Property
             }
         });
         let _ = PropVariantClear(&raw mut value);
-        read.filter(|value| !value.shown.trim().is_empty() || value.stars.is_some())
+        // The states of sync are numbers Windows writes no text for.
+        let numbered = matches!(property, FileProperty::SyncState | FileProperty::Sharing);
+        read.filter(|value| {
+            !value.shown.trim().is_empty()
+                || value.stars.is_some()
+                || (numbered && value.order.is_some())
+        })
     }
 }
 

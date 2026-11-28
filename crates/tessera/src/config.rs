@@ -811,8 +811,8 @@ pub struct Config {
     // #[serde(default)]
     // pub terminal: crate::terminal::TerminalConfig,
     // Wave 3, files-search-actions: the actions of the file menus, by kind of file.
-    // #[serde(default, rename = "file_action")]
-    // pub file_actions: Vec<crate::file_actions::FileAction>,
+    #[serde(default, rename = "file_action")]
+    pub file_actions: Vec<crate::file_actions::FileAction>,
     // Wave 3, shell-services: the services Explorer hosts for other programs.
     // #[serde(default)]
     // pub shell_services: crate::shell_services::ShellServicesConfig,

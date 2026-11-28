@@ -2592,6 +2592,13 @@ impl ConfigFile {
         let tiling = tiling.or_insert_with(|| Item::Table(Table::new()));
         let tiling = tiling.as_table_mut()?;
         let item = tiling.entry(kind.key());
+// files-search-actions: the `[[file_action]]` entries, which the page of the
+// settings for them adds, changes, moves and removes.
+impl ConfigFile {
+    /// The `[[file_action]]` entries, made where there are none; `None`
+    /// where the file has something else under that name.
+    fn file_action_entries(&mut self) -> Option<&mut ArrayOfTables> {
+        let item = self.document.entry("file_action");
         let item = item.or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
         item.as_array_of_tables_mut()
     }
@@ -2653,6 +2660,59 @@ impl ConfigFile {
         let gone: Vec<String> = { table.iter() }
             .map(|(key, _)| key.to_owned())
             .filter(|key| !entry.contains_key(key))
+    /// Takes `[[file_action]]` away where no entry is left.
+    fn tidy_file_actions(&mut self) {
+        let empty = { self.document.get("file_action") }
+            .and_then(Item::as_array_of_tables)
+            .is_some_and(ArrayOfTables::is_empty);
+        if empty {
+            self.document.remove("file_action");
+        }
+    }
+
+    /// The values of `action`, checked to make an action Tessera can use.
+    fn file_action_values(action: &toml::Table) -> Result<Vec<(String, Value)>, String> {
+        toml::Value::Table(action.clone())
+            .try_into::<crate::file_actions::FileAction>()
+            .map_err(|error| format!("the action is not one Tessera can use: {error}"))?;
+        let mut values = Vec::with_capacity(action.len());
+        for (key, value) in action {
+            let written: Value = { value.to_string().parse() }
+                .map_err(|_| format!("`{key}` of the action cannot be written"))?;
+            values.push((key.clone(), written));
+        }
+        Ok(values)
+    }
+
+    /// Appends `action` as a `[[file_action]]`; where it is among the
+    /// entries is returned.
+    pub fn add_file_action(&mut self, action: &toml::Table) -> Result<usize, String> {
+        let values = Self::file_action_values(action)?;
+        let mut entry = Table::new();
+        for (key, value) in values {
+            entry.insert(&key, Item::Value(value));
+        }
+        let entries = { self.file_action_entries() }
+            .ok_or("`file_action` is not a list of tables in the file")?;
+        entries.push(entry);
+        Ok(entries.len() - 1)
+    }
+
+    /// Has the `[[file_action]]` at `index` say what `action` says, once it
+    /// is checked to be one Tessera can use: the keys it lacks are taken
+    /// away, and those it has are set where they are, keeping their
+    /// comments.
+    pub fn set_file_action(&mut self, index: usize, action: &toml::Table) -> Result<(), String> {
+        let values = Self::file_action_values(action)?;
+        let entries = { self.file_action_entries() }
+            .ok_or("`file_action` is not a list of tables in the file")?;
+        let Some(table) = entries.get_mut(index) else {
+            self.tidy_file_actions();
+            return Err("the actions of the file menus have changed in the meantime".to_owned());
+        };
+        let gone: Vec<String> = { table.iter() }
+            .map(|(key, _)| key.to_owned())
+            .filter(|key| !action.contains_key(key))
             .collect();
         for key in gone {
             table.remove(&key);
@@ -2680,6 +2740,10 @@ impl ConfigFile {
         index: usize,
     ) -> bool {
         let Some(entries) = self.tiling_overrides(kind) else {
+    /// Takes away the `[[file_action]]` at `index`. Whether there was one
+    /// is returned.
+    pub fn remove_file_action(&mut self, index: usize) -> bool {
+        let Some(entries) = self.file_action_entries() else {
             return false;
         };
         let there = index < entries.len();
@@ -3463,5 +3527,93 @@ mod key_entry_tests {
         edited.config().expect("it is usable");
         assert!(edited.remove_snap_layout("thirds"));
         assert!(edited.document.to_string().contains("gap = 4"));
+        self.tidy_file_actions();
+        there
+    }
+
+    /// Moves the `[[file_action]]` at `from` to the place `to`, the others
+    /// moving up or down for it, comments and all. Whether both places
+    /// were there is returned.
+    pub fn move_file_action(&mut self, from: usize, to: usize) -> bool {
+        let Some(entries) = self.file_action_entries() else {
+            return false;
+        };
+        let count = entries.len();
+        if from >= count || to >= count {
+            self.tidy_file_actions();
+            return false;
+        }
+        let mut tables: Vec<Table> = entries.iter().cloned().collect();
+        // The file is written in the order of the places tables were read
+        // at, so the places stay and the tables move between them.
+        let places: Vec<Option<isize>> = tables.iter().map(Table::position).collect();
+        let moved = tables.remove(from);
+        tables.insert(to, moved);
+        entries.clear();
+        for (mut table, place) in tables.into_iter().zip(places) {
+            table.set_position(place);
+            entries.push(table);
+        }
+        true
+    }
+}
+
+#[cfg(test)]
+mod file_action_tests {
+    use super::*;
+
+    fn action(text: &str) -> toml::Table {
+        toml::from_str(text).unwrap()
+    }
+
+    fn names(file: &ConfigFile) -> Vec<String> {
+        let table = file.table().unwrap();
+        let entries = table["file_action"].as_array().cloned().unwrap_or_default();
+        { entries.iter() }
+            .map(|entry| entry["name"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn actions_are_added_changed_moved_and_taken_away() {
+        let mut file = ConfigFile::parse("# Mine.\n").unwrap();
+        let first = action(
+            "name = \"a\"\ncommand = \"a.exe %f\"\nmatch = { kind = \"file\", extensions = [\"png\"] }",
+        );
+        assert_eq!(file.add_file_action(&first), Ok(0));
+        assert_eq!(
+            file.add_file_action(&action("name = \"b\"\ncommand = \"b.exe\"")),
+            Ok(1)
+        );
+        assert_eq!(
+            file.add_file_action(&action("name = \"c\"\ncommand = \"c.exe\"")),
+            Ok(2)
+        );
+        let config = file.config().expect("it is usable");
+        assert_eq!(config.file_actions.len(), 3);
+        assert_eq!(config.file_actions[0].matching.extensions, ["png"]);
+        // What Tessera cannot use is not written.
+        assert!(file.add_file_action(&action("name = \"x\"")).is_err());
+        assert!(
+            file.set_file_action(0, &action("name = \"a\"\ncommand = \"a\"\nodd = 1"))
+                .is_err()
+        );
+        assert!(
+            file.set_file_action(
+                1,
+                &action("name = \"B\"\ncommand = \"b.exe\"\nterminal = true")
+            )
+            .is_ok()
+        );
+        assert!(file.set_file_action(9, &first).is_err());
+        assert!(file.move_file_action(2, 0));
+        assert_eq!(names(&file), ["c", "a", "B"]);
+        assert!(!file.move_file_action(3, 0));
+        assert!(file.remove_file_action(1));
+        assert_eq!(names(&file), ["c", "B"]);
+        assert!(file.remove_file_action(0) && file.remove_file_action(0));
+        assert!(!file.remove_file_action(0));
+        assert!(!file.document.to_string().contains("file_action"));
+        assert!(file.document.to_string().contains("# Mine."));
     }
 }

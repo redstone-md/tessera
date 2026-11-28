@@ -489,6 +489,31 @@
 # preview_handlers = true
 # preview_timeout = 5.0
 
+# [[file_action]] adds an entry to the menus of files of the file manager and
+# of the desktop, before the verbs of Windows, for the items its match fits
+# (the settings edit them under Files). In command, %f is the first path
+# chosen, %F all of them, %d the folder of the first, %n its name, %N its
+# name without its extension, %u its file: address and %% a %; paths are put
+# in quotes unless the command has them in quotes.
+#   name       what the menu calls it
+#   command    the program and its arguments
+#   match      what it is offered for: names (patterns such as "*.png"),
+#              kind ("file", "folder" or "any"), extensions, min and max
+#              (how many items), and background (also for the folder shown)
+#   submenu    the submenu it is grouped in with the actions of that name
+#   icon       a glyph of Segoe Fluent Icons ("E91B"), an .ico or .png file,
+#              or a program or library with an icon number ("tool.exe,0")
+#   terminal   whether it runs in a console window that stays open (false)
+#   elevated   whether it runs as an administrator (false)
+#   confirm    a question asked before it runs
+# [[file_action]]
+# name = "Optimize the picture"
+# command = "oxipng.exe -o 4 %F"
+# match = { extensions = ["png"], kind = "file", min = 1 }
+# submenu = "Pictures"
+# icon = "E91B"
+# confirm = "Optimize the pictures?"
+
 # [shell] says what Tessera does as the shell of the session, in the place of
 # Explorer (`tessera shell install` makes it that at the next sign-in,
 # `tessera shell revert` gives it back; see docs/SHELL.md). Beside Explorer

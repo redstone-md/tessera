@@ -83,6 +83,31 @@ preview_timeout = 5.0     # seconds a preview handler is waited for, 1 to 60
 ```
 
 The columns of the details are kept per folder whatever `per_folder` says, in `%LOCALAPPDATA%\tessera\files-views.toml` beside the looks, the 500 used last; the Recycle Bin, Home and the results of a search keep one set each. A change of `[file_view]` applies to the windows that are open the next time they draw; `preview` and `details` only to windows opened afterwards.
+
+### Searching, and the actions of the file menus
+
+A search of the file manager (Enter in the filter field) reads what is typed as Explorer's Advanced Query Syntax: bare words and `"quoted phrases"` that names hold, `kind:` (`documents`, `pictures`, `music`, `videos`, `folders`, `archives`), `modified:` or `date:` (`today`, `yesterday`, `this-week`, `last-week`, `this-month`, `last-month`, `this-year`, `last-year`, `week`, `month` and `year` back from today, a day such as `2026-01-31` with `>`, `>=`, `<` or `<=`, or `2026-01-01..2026-01-31`), `size:` (`empty`, `tiny` up to 10 KB, `small` up to 100 KB, `medium` up to 1 MB, `large` up to 16 MB, `huge` up to 128 MB, `gigantic` above, a size with a comparison as `>10MB`, or `1MB..10MB`), `author:`, `tag:`, `ext:` or `type:` (`ext:png,jpg`) and `content:` (`content:invoice` or `content:"q1 plan"` must be in what a file holds; `content:on` looks for the bare words in what files hold as well as in their names). For example `report kind:documents modified:this-month content:budget`. The chips under the field write the same words. The last 20 searches are kept in `%LOCALAPPDATA%\tessera\files-searches.toml`, which is no configuration and can be deleted; "Save search" writes a `.search-ms` file into the Searches folder of the user.
+
+`[[file_action]]` adds an entry to the menus of files of the file manager and of the desktop, before the verbs of the Shell, for the items it fits; the settings edit them on a page of the section Files:
+
+```toml
+[[file_action]]
+name = "Optimize the picture"          # what the menu calls it
+command = "oxipng.exe -o 4 %F"         # the program and its arguments
+match = { extensions = ["png"], kind = "file", min = 1, max = 50 }
+submenu = "Pictures"                   # actions of one submenu are grouped under it
+icon = "E91B"                          # a glyph of Segoe Fluent Icons, an .ico or .png, or "C:\\Tools\\tool.exe,0"
+terminal = false                       # run in a console window that stays open
+elevated = false                       # run as an administrator
+confirm = "Optimize the pictures?"     # asked before it runs
+
+[[file_action]]
+name = "Open a console here"
+command = "wt.exe -d %d"
+match = { kind = "folder", max = 1, background = true }
+```
+
+In `command`, `%f` is the first path chosen, `%F` all of them, `%d` the folder of the first, `%n` its name, `%N` its name without its extension, `%u` its `file:` address and `%%` a `%`; paths are put in quotes unless the command has them in quotes already (`"%f"`), and environment variables such as `%USERPROFILE%` are expanded. The command starts in the folder of the first item. `match` takes `names` (patterns such as `["*.png", "README*"]`, any of which each item's name matches, in any case), `kind` (`"file"`, `"folder"` or `"any"`, the default), `extensions` (any of which each file has, without the dot), `min` and `max` (how many items are chosen; at least one) and `background` (also offered in the menu of the folder shown, which is then the item). An action whose command uses `%f`, `%F`, `%d` or `%u` is not offered for items that have no path, such as This PC.
 ## The clipboard
 
 `[clipboard]` sets the history of the clipboard that Tessera keeps while it runs (see [FEATURES.md](FEATURES.md)):

@@ -19,7 +19,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, WeakEntity, Window, div, prelude::FluentBuilder, px,
 };
 
-use super::super::columns::{Columns, ShownColumn, choosable};
+use super::super::columns::{Columns, ShownColumn, choosable, more_choosable};
 use super::super::model::{Column, Entry, Location, SortKey, SortKeys};
 use super::super::session::{FolderViews, columns_key};
 use super::{
@@ -27,7 +27,7 @@ use super::{
 };
 use crate::i18n::Language;
 use crate::menu::{MenuEntry, Menus};
-use crate::platform::{CloudState, FileProperty, Properties, PropertyValue};
+use crate::platform::{CloudState, FileProperty, Properties, PropertyValue, SyncState, shared};
 use crate::popup::PopupAnchor;
 use crate::theme::Theme;
 use crate::ui::{icon, one_line};
@@ -39,6 +39,10 @@ const BATCH: usize = 64;
 const ICON_CLOUD: &str = "\u{e753}";
 const ICON_KEPT: &str = "\u{ec61}";
 const ICON_AVAILABLE: &str = "\u{e930}";
+const ICON_SYNCING: &str = "\u{e895}";
+const ICON_SYNC_ERROR: &str = "\u{e783}";
+const ICON_EXCLUDED: &str = "\u{e8d8}";
+const ICON_SHARED: &str = "\u{e902}";
 
 /// A heading being dragged to another place among the headings.
 struct HeadingDrag {
@@ -183,19 +187,20 @@ impl FolderPane {
         let language = Language::of(cx);
         let shown = self.shown_columns();
         let pane = cx.entity().downgrade();
-        let entries = { choosable().into_iter() }
-            .map(|column| {
-                let pane = pane.clone();
-                let mark = match shown.has(column) {
-                    true => ICON_CHECK,
-                    false => ICON_NONE,
-                };
-                MenuEntry::new(mark, language.say(column.title()), move |cx| {
-                    pane.update(cx, |pane, cx| pane.toggle_column(column, cx))
-                        .ok();
-                })
+        let entry = |column: Column| {
+            let pane = pane.clone();
+            let mark = match shown.has(column) {
+                true => ICON_CHECK,
+                false => ICON_NONE,
+            };
+            MenuEntry::new(mark, language.say(column.title()), move |cx| {
+                pane.update(cx, |pane, cx| pane.toggle_column(column, cx))
+                    .ok();
             })
-            .collect();
+        };
+        let mut entries: Vec<MenuEntry> = choosable().into_iter().map(entry).collect();
+        let more = more_choosable().into_iter().map(entry).collect();
+        entries.push(MenuEntry::submenu(ICON_NONE, language.say("More…"), more));
         Menus::open(entries, anchor, cx);
     }
 
@@ -318,26 +323,54 @@ impl FolderPane {
     /// of its state for a cloud file.
     pub(super) fn cell_content(&self, entry: &Entry, column: Column, theme: &Theme) -> AnyElement {
         if column == Column::Status {
-            let Some(state) = entry.cloud else {
-                return div().into_any_element();
-            };
-            let color = match state {
-                CloudState::OnlineOnly => theme.colors.primary,
-                _ => gpui::rgb(0x3fb950).into(),
-            };
-            return div()
-                .flex()
-                .items_center()
-                .gap(theme.spacing.tiny)
-                .child(
-                    div()
-                        .text_color(color)
-                        .child(icon(theme, cloud_glyph(state))),
-                )
-                .child(one_line(self.say(state.title())))
-                .into_any_element();
+            return self.status_cell(entry, theme);
         }
         one_line(self.cell_text(entry, column)).into_any_element()
+    }
+
+    /// The state of a cloud file: what its overlay says, or where its sync
+    /// provider says it is syncing, failed or is left out, that; and
+    /// whether it is shared.
+    fn status_cell(&self, entry: &Entry, theme: &Theme) -> AnyElement {
+        let number = |property| {
+            self.property_of(entry, property)
+                .and_then(|value| value.order)
+        };
+        let syncing = number(FileProperty::SyncState).and_then(SyncState::of);
+        let shared = number(FileProperty::Sharing).is_some_and(shared);
+        let green: gpui::Hsla = gpui::rgb(0x3fb950).into();
+        let (glyph, color, text) = match (syncing, entry.cloud) {
+            (Some(state), _) => {
+                let (glyph, color) = match state {
+                    SyncState::Syncing => (ICON_SYNCING, theme.colors.primary),
+                    SyncState::Error => (ICON_SYNC_ERROR, gpui::rgb(0xf85149).into()),
+                    SyncState::Warning => (ICON_SYNC_ERROR, theme.colors.primary),
+                    SyncState::Excluded => (ICON_EXCLUDED, theme.colors.on_surface_variant),
+                };
+                (glyph, color, self.say(state.title()))
+            }
+            (None, Some(state)) => {
+                let color = match state {
+                    CloudState::OnlineOnly => theme.colors.primary,
+                    _ => green,
+                };
+                (cloud_glyph(state), color, self.say(state.title()))
+            }
+            (None, None) if shared => (ICON_SHARED, theme.colors.on_surface_variant, ""),
+            (None, None) => return div().into_any_element(),
+        };
+        let text = match (shared, text.is_empty()) {
+            (true, true) => self.say("Shared").to_owned(),
+            (true, false) => format!("{text} \u{b7} {}", self.say("Shared")),
+            (false, _) => text.to_owned(),
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap(theme.spacing.tiny)
+            .child(div().text_color(color).child(icon(theme, glyph)))
+            .child(one_line(text))
+            .into_any_element()
     }
 
     /// `text` in the language of the user.

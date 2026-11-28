@@ -15,6 +15,7 @@ pub mod devices;
 mod display_mode;
 mod display_settings;
 mod edges_editor;
+mod file_actions_page;
 mod focused;
 mod hdr;
 mod hotspot;
@@ -95,6 +96,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(zones_editor::ZonesEditorModule),
         Box::new(devices::DevicesModule),
         Box::new(FilesModule),
+        Box::new(file_actions_page::FileActionsModule),
         Box::new(focused::FocusedModule),
         Box::new(keyboard::KeyboardModule),
         Box::new(label::LabelModule),

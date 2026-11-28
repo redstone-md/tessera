@@ -75,6 +75,10 @@ impl SearchIndex {
 
     /// The same for the files and folders below the folder `root`, at any
     /// depth. Only what the index holds is found: see [`Self::covers`].
+    #[allow(
+        dead_code,
+        reason = "kept for callers that look for names alone; the file manager asks `files_matching`"
+    )]
     pub fn files_under(root: &Path, text: &str, limit: usize) -> Result<Vec<PathBuf>> {
         Self::answer(question(text, limit, Some(root)), limit)
     }
@@ -402,6 +406,27 @@ pub struct FileSearch {
     pub size: Option<(Comparison, u64)>,
     /// The folder to look below.
     pub folder: Option<PathBuf>,
+    /// Whether the words may be held by what files hold as well as by
+    /// their names, as the file manager's "Contents" chip asks.
+    pub name_or_content: bool,
+    /// Words or phrases what files hold must have, whatever their names.
+    pub content_words: Vec<String>,
+    /// The kinds (`System.Kind`) any of which a file may be.
+    pub kinds: Vec<&'static str>,
+    /// Extensions without the dot that make a file of one of the kinds
+    /// wanted too, for the kinds the index does not tell apart (archives).
+    pub kind_extensions: Vec<String>,
+    /// The local days a file was last changed on: from the first, until
+    /// the one after the last, either open.
+    pub modified_days: Option<(Option<NaiveDate>, Option<NaiveDate>)>,
+    /// The sizes in bytes: from the first, until the one after the last.
+    pub size_bounds: Option<(u64, Option<u64>)>,
+    /// Words the authors (`System.Author`) must have one beginning with.
+    pub authors: Vec<String>,
+    /// Tags (`System.Keywords`) a file must have.
+    pub keywords: Vec<String>,
+    /// Whether only files that have tags are wanted.
+    pub tagged: bool,
 }
 
 impl FileSearch {
@@ -471,6 +496,15 @@ impl FileSearch {
             || self.modified.is_some()
             || self.size.is_some()
             || self.folder.is_some()
+            || self.name_or_content
+            || !self.content_words.is_empty()
+            || !self.kinds.is_empty()
+            || !self.kind_extensions.is_empty()
+            || self.modified_days.is_some()
+            || self.size_bounds.is_some()
+            || !self.authors.is_empty()
+            || !self.keywords.is_empty()
+            || self.tagged
     }
 
     /// The same search, looking loosely into what files hold.
@@ -499,12 +533,7 @@ impl FileSearch {
         to_utc: impl Fn(NaiveDateTime) -> NaiveDateTime,
     ) -> Option<String> {
         let mut conditions = Vec::new();
-        // A quote of either kind would end the text it stands in, and a
-        // star already follows every word.
-        let terms: Vec<String> = { self.words.iter() }
-            .map(|word| word.replace(['"', '*'], "").replace('\'', "''"))
-            .filter(|word| !word.trim().is_empty())
-            .collect();
+        let terms = safe_terms(&self.words);
         let column = match self.content {
             true => "*",
             false => "System.FileName",
@@ -512,17 +541,61 @@ impl FileSearch {
         if self.loose && !terms.is_empty() {
             conditions.push(format!("FREETEXT(*, '{}')", terms.join(" ")));
         } else if !terms.is_empty() {
-            // A phrase is looked for whole, a word as the start of one.
-            let terms: Vec<String> = { terms.iter() }
-                .map(|term| match term.contains(char::is_whitespace) {
-                    true => format!("\"{}\"", term.trim()),
-                    false => format!("\"{term}*\""),
-                })
-                .collect();
-            conditions.push(format!("CONTAINS({column}, '{}')", terms.join(" AND ")));
+            let terms = contains_terms(&terms);
+            conditions.push(match self.name_or_content && !self.content {
+                true => format!("(CONTAINS(System.FileName, '{terms}') OR CONTAINS(*, '{terms}'))"),
+                false => format!("CONTAINS({column}, '{terms}')"),
+            });
+        }
+        let content_terms = safe_terms(&self.content_words);
+        if !content_terms.is_empty() {
+            let terms = contains_terms(&content_terms);
+            conditions.push(format!("CONTAINS(*, '{terms}')"));
         }
         if let Some(kind) = self.kind {
             conditions.push(format!("System.Kind = '{kind}'"));
+        }
+        let any_kind: Vec<String> = { self.kinds.iter() }
+            .map(|kind| format!("System.Kind = '{}'", kind.replace('\'', "''")))
+            .chain(
+                { self.kind_extensions.iter() }
+                    .filter(|ext| ext.chars().all(is_name_letter))
+                    .map(|ext| format!("System.FileExtension = '.{ext}'")),
+            )
+            .collect();
+        if !any_kind.is_empty() {
+            conditions.push(format!("({})", any_kind.join(" OR ")));
+        }
+        for author in safe_terms(&self.authors) {
+            let author = contains_terms(&[author]);
+            conditions.push(format!("CONTAINS(System.Author, '{author}')"));
+        }
+        for keyword in &self.keywords {
+            let keyword = keyword.trim().replace('\'', "''");
+            if !keyword.is_empty() {
+                conditions.push(format!("System.Keywords = '{keyword}'"));
+            }
+        }
+        if self.tagged {
+            conditions.push("System.Keywords IS NOT NULL".to_owned());
+        }
+        let at = |time: NaiveDateTime| time.format("%Y-%m-%d %H:%M:%S").to_string();
+        if let Some((from, until)) = self.modified_days {
+            let start = |day: NaiveDate| at(to_utc(day.and_time(chrono::NaiveTime::MIN)));
+            if let Some(from) = from {
+                conditions.push(format!("System.DateModified >= '{}'", start(from)));
+            }
+            if let Some(until) = until {
+                conditions.push(format!("System.DateModified < '{}'", start(until)));
+            }
+        }
+        if let Some((from, until)) = self.size_bounds {
+            if from > 0 {
+                conditions.push(format!("System.Size >= {from}"));
+            }
+            if let Some(until) = until {
+                conditions.push(format!("System.Size < {until}"));
+            }
         }
         if !self.extensions.is_empty() {
             let any: Vec<String> = { self.extensions.iter() }
@@ -535,7 +608,6 @@ impl FileSearch {
         {
             let start = to_utc(day.and_time(chrono::NaiveTime::MIN));
             let end = to_utc(day.and_time(chrono::NaiveTime::MIN) + Days::new(1));
-            let at = |time: NaiveDateTime| time.format("%Y-%m-%d %H:%M:%S").to_string();
             let field = "System.DateModified";
             conditions.push(match (comparison, since) {
                 // A span back from today is since its first day, and
@@ -564,7 +636,10 @@ impl FileSearch {
             .folder
             .as_deref()
             .map_or_else(|| FILE_SCHEME.to_owned(), scope_of);
-        let order = match self.content && !terms.is_empty() {
+        // What is looked for in what files hold is ordered by how well
+        // they match.
+        let ranked = (self.content || self.name_or_content) && !terms.is_empty();
+        let order = match ranked || !content_terms.is_empty() {
             true => "System.Search.Rank DESC",
             false => "System.DateModified DESC",
         };
@@ -576,6 +651,29 @@ impl FileSearch {
              WHERE SCOPE='{scope}'{conditions} ORDER BY {order}"
         ))
     }
+}
+
+/// `words` as they may stand in a text of a query: without a quote of
+/// either kind, which would end the text, nor stars, as one follows every
+/// word, and without the empty ones.
+fn safe_terms(words: &[String]) -> Vec<String> {
+    { words.iter() }
+        .map(|word| word.replace(['"', '*'], "").replace('\'', "''"))
+        .filter(|word| !word.trim().is_empty())
+        .collect()
+}
+
+/// What `CONTAINS` is given for `terms`, made safe by [`safe_terms`]: a
+/// phrase looked for whole, a word as the start of one, all of them
+/// wanted.
+fn contains_terms(terms: &[String]) -> String {
+    let terms: Vec<String> = { terms.iter() }
+        .map(|term| match term.contains(char::is_whitespace) {
+            true => format!("\"{}\"", term.trim()),
+            false => format!("\"{term}*\""),
+        })
+        .collect();
+    terms.join(" AND ")
 }
 
 /// Whether `c` may stand in an extension.
@@ -752,6 +850,45 @@ mod tests {
         assert!(!older.contains(">="));
         assert!(at("modified:<=month").contains("System.DateModified < '2026-02-15 00:00:00'"));
         assert_eq!(FileSearch::parse("modified:soon").words, ["modified:soon"]);
+    }
+
+    #[test]
+    fn the_file_manager_asks_for_contents_kinds_authors_tags_and_spans() {
+        let day = |d: u32| NaiveDate::from_ymd_opt(2026, 3, d).unwrap();
+        let search = FileSearch {
+            words: vec!["plan".to_owned()],
+            name_or_content: true,
+            content_words: vec!["it's due".to_owned()],
+            kinds: vec!["picture"],
+            kind_extensions: vec!["zip".to_owned(), "z'ip".to_owned()],
+            modified_days: Some((Some(day(2)), Some(day(9)))),
+            size_bounds: Some((0, Some(1025))),
+            authors: vec!["ann".to_owned()],
+            keywords: vec!["o'sea".to_owned()],
+            folder: Some(PathBuf::from(r"D:\Work")),
+            ..FileSearch::default()
+        };
+        let asked = { search.question(50, day(15).and_hms_opt(12, 0, 0).unwrap(), |l| l) }
+            .expect("it asks");
+        assert!(
+            asked.contains("(CONTAINS(System.FileName, '\"plan*\"') OR CONTAINS(*, '\"plan*\"'))")
+        );
+        assert!(asked.contains("CONTAINS(*, '\"it''s due\"')"));
+        assert!(asked.contains("(System.Kind = 'picture' OR System.FileExtension = '.zip')"));
+        assert!(!asked.contains("z''ip"));
+        assert!(asked.contains("System.DateModified >= '2026-03-02 00:00:00'"));
+        assert!(asked.contains("System.DateModified < '2026-03-09 00:00:00'"));
+        assert!(asked.contains("System.Size < 1025") && !asked.contains("System.Size >="));
+        assert!(asked.contains("CONTAINS(System.Author, '\"ann*\"')"));
+        assert!(asked.contains("System.Keywords = 'o''sea'"));
+        assert!(asked.ends_with("ORDER BY System.Search.Rank DESC"));
+        let tagged = FileSearch {
+            tagged: true,
+            folder: Some(PathBuf::from(r"D:\Work")),
+            ..FileSearch::default()
+        };
+        let asked = tagged.question(5, NaiveDateTime::default(), |l| l).unwrap();
+        assert!(asked.contains("System.Keywords IS NOT NULL"));
     }
 
     #[test]

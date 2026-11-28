@@ -24,6 +24,7 @@ pub use win32::PinVerb;
 pub use win32::PowerChoices;
 #[allow(unused_imports, reason = "for the starts that wait for a program")]
 pub use win32::Process;
+pub use win32::PropertyReader;
 pub use win32::QuickFolder;
 pub use win32::RecycledItem;
 pub use win32::SessionKey;
@@ -97,6 +98,7 @@ pub use win32::{DisplayOutput, DisplaySetup, Rotation, VideoMode, hertz_text};
 pub use win32::{DragOut, DropEvent, DropTarget, DropZone, DropZones};
 pub use win32::{DriveDialog, NetworkDrives, SharePackage, reveal, reveal_with};
 pub use win32::{EdgeBand, EdgeSpan, HidingClaim};
+pub use win32::{ExplorerCommand, ExplorerCommands};
 pub use win32::{
     ExplorerShell, NextShell, SHELL_FLAG, ShellRegistration, attach_console, is_safe_mode,
     own_program_name, recovery_keys_held, started_as_shell,
@@ -152,6 +154,7 @@ pub use win32::{Removal, app_settings, put_on_desktop};
 pub use win32::{Repeat, SessionInfo};
 pub use win32::{RunHistory, RunningProcess};
 pub use win32::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
+pub use win32::{SyncState, shared};
 pub use win32::{SystemWallpaper, WallpaperPosition, user_locale};
 pub use win32::{WallpaperAnswers, WallpaperRequest, WallpaperServer};
 pub use win32::{expand_variables, find_program, recent_folder};
